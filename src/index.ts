@@ -182,7 +182,6 @@ class ConnectionManager {
           env: config.env,
           stderr: 'pipe'
         })
-        await transport.start()
         return transport
       }
 
