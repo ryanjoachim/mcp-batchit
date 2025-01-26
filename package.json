@@ -1,7 +1,7 @@
 {
   "name": "mcp-batchit",
   "version": "1.0.0",
-  "description": "A batch operations wrapper for various MCP operations",
+  "description": "Batch multiple MCP tool calls into a single request—reducing overhead and token usage for AI agents",
   "main": "build/index.js",
   "type": "module",
   "types": "build/index.d.ts",
@@ -26,11 +26,20 @@
   },
   "keywords": [
     "mcp",
-    "filesystem",
+    "modelcontextprotocol",
     "batch",
-    "operations"
+    "operations",
+    "ai",
+    "llm",
+    "agent",
+    "filesystem",
+    "aggregator"
   ],
   "author": "Ryan Joachim",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ryanjoachim/mcp-batchit.git"
+  },
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.4.0"
