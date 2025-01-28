@@ -16,6 +16,8 @@ dist/
 *.swp
 *.swo
 .DS_Store
+docs/
+memory-bank/
 
 # Logs
 logs/
