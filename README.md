@@ -1,3 +1,4 @@
+
 <div align="center">
 
 # MCP BatchIt
@@ -8,20 +9,25 @@
 
 </div>
 
+---
+
 ## Table of Contents
 
-- [Overview](#overview)
-- [Why "One Action per Message" Is a Problem](#why-one-action-per-message-is-a-problem)
-- [How MCP BatchIt Solves It](#how-mcp-batchit-solves-it)
-- [Features & Limitations](#features--limitations)
-- [Installation](#installation)
-- [Usage Example (Filesystem Workflow)](#usage-example-filesystem-workflow)
-- [FAQ / Notes](#faq--notes)
-- [License](#license)
+1. [Introduction](#introduction)
+2. [Why Use BatchIt](#why-use-batchit)
+3. [Key Features & Limitations](#key-features--limitations)
+4. [Installation & Startup](#installation--startup)
+5. [Multi-Phase Usage](#multi-phase-usage)
+   - [Implementation Phases](#implementation-phases)
+     - [Information Gathering](#information-gathering)
+     - [LLM‐Only Step (List Code Definitions)](#llm-only-step-list-code-definitions)
+     - [Document Creation](#document-creation)
+6. [FAQ](#faq)
+7. [License](#license)
 
 ---
 
-## Overview
+## Introduction
 > ⚠️ **NOTICE: Work in Progress**
 >
 > This project is actively being developed to address several complex challenges:
@@ -31,126 +37,115 @@
 >
 > While functional, expect ongoing improvements and changes as we refine the solution.
 
+**MCP BatchIt** is a simple aggregator server in the [Model Context Protocol (MCP)](https://modelcontext.ai/) ecosystem. It exposes just **one** tool: **`batch_execute`**. Rather than calling multiple MCP tools (like `fetch`, `read_file`, `create_directory`, `write_file`, etc.) in **separate** messages, you can **batch** them together in one aggregator request.
 
-
-In the **Model Context Protocol (MCP)** world, we have specialized servers (e.g., a "filesystem" MCP server) that provide **tools** like `"search_files"`, `"read_multiple_files"`, `"write_file"`, etc. Typically an LLM or AI agent must either utilize internal versions of these tools, or **call** these MCP tools, **one at a time**, in a multi-step conversation:
-
-1. Agent calls "`search_files`".
-2. Agent sends results to LLM.
-3. Wait for LLM response.
-4. Agent calls "`read_file`".
-5. Agent sends results to LLM.
-6. Wait for LLM response.
-7. Agent calls "`write_file`"… and so on.
-
-**MCP BatchIt** eliminates that overhead by letting the agent send **one** "`batch_execute`" request, which in turn calls **all** those underlying MCP tools (like "search_files", "edit_file", "directory_tree", etc.) behind the scenes. This drastically **reduces** round‐trips, saving time and tokens, while still using the **existing** MCP server tools.
+This dramatically reduces token usage, network overhead, and repeated context in your AI agent or LLM conversation.
 
 ---
 
-## Why "One Action per Message" Is a Problem
+## Why Use BatchIt
 
-Many AI agents (e.g., Cline, Roo, Claude Desktop) enforce:
-1. **One** tool call per message
-2. Each step must see the previous step's result
-3. Large tasks require **many** calls. So, so many...
+- **One Action per Message** Problem:
+  Normally, an LLM or AI agent can only call a single MCP tool at a time, forcing multiple calls for multi-step tasks.
 
-**Result**:
-- **Excessive Overhead**: e.g. 12 file operations become ~12 separate tool calls (plus ~12 response messages per tool result, resulting in an exponential context expansion).
-- **Token/Context Bloat**: Re-explaining the same project or file context.
-- **COST per API request**: Each subsequent API request increases the number of tokens being sent.
-- **Slower**: Each call waits for a response before the next.
+- **Excessive Round Trips**:
+  10 separate file operations might require 10 messages → 10 responses.
 
----
-
-## How MCP BatchIt Solves It
-
-`mcp-batchit` addresses this overhead by letting the LLM (or agent) **batch** multiple sub-operations into **one** request. For instance:
-
-- **Batch Execution**
-  - You can group many sub-steps (like multiple reads, writes, or searches) into **one** MCP request.
-- **Reduced Token Usage**
-  - Because you only send **one** message containing all the sub-operations, you use **far** fewer tokens explaining each step.
-- **Parallel / Concurrent Operations**
-  - `maxConcurrent` can run sub‐operations in parallel, so the aggregator can speed up big tasks.
-- **Works with Existing Tools**
-  - The aggregator doesn't replace your filesystem or database servers; it simply calls them behind the scenes.
-  - The LLM/Agent only sees **one** "tool call": `batch_execute`.
-
-In short, **BatchIt** **doesn't** do advanced chaining or pass outputs automatically from step to step (YET!). But it **does** eliminate many round trips and merges them into a single request.
+- **BatchIt’s Approach**:
+  1. Takes a single `batch_execute` request.
+  2. Spawns (or connects to) the actual target MCP server (like a filesystem server) behind the scenes.
+  3. Runs each sub-operation (tool call) in parallel up to `maxConcurrent`.
+  4. If one sub-op fails and `stopOnError` is true, it halts new sub-ops.
+  5. Returns one consolidated JSON result.
 
 ---
 
-## Features & Limitations
+## Key Features & Limitations
 
-### ✅ Features
+### Features
 
-1. **Single Tool: `batch_execute`**
-   - One aggregator entry point.
-   - Receives an array of sub-operations, each referencing the actual "tool" name on the downstream MCP server (like `read_file`, `write_file`, etc.).
+1. **Single “Batch Execute” Tool**
+   - You simply specify a list of sub‐ops referencing your existing MCP server’s tools.
 
-2. **Concurrency Control**
-   - `maxConcurrent`: how many sub-operations to run at once.
-   - `timeoutMs`: per-operation timeout.
-   - `stopOnError`: if one sub-operation fails, skip the rest.
+2. **Parallel Execution**
+   - Run multiple sub-ops at once, controlled by `maxConcurrent`.
 
-3. **Caching Connections**
-   - Reuses connections to the target server (via **WebSocket** or **STDIO**).
-   - Closes them after 5 minutes idle by default.
+3. **Timeout & Stop on Error**
+   - Each sub-op races a `timeoutMs`, and you can skip remaining ops if one fails.
 
-4. **Reduced Round-Trips**
-   - Instead of many separate calls, you do fewer aggregator calls with multiple steps each.
+4. **Connection Caching**
+   - Reuses the same connection to the downstream MCP server for repeated calls, closing after an idle timeout.
 
-### ❌ Limitations (In Progress!)
+### Limitations
 
-- **No Automatic Data-Passing**
-  - Doesn't feed the output of sub-operation #1 as input to #2. You must plan or chunk them manually if needed.
-- **No Partial Progress**
-  - Currently, everything returns in one shot. No incremental progress is built in.
-- **No Built-In Retries**
-  - If you want advanced error strategies, you must handle them yourself.
-- **One Tool**
-  - Only `batch_execute` is exposed. The aggregator doesn't define other tools like "list_remote_tools."
+1. **No Data Passing Mid-Batch**
+   - If sub-op #2 depends on #1’s output, do multiple aggregator calls.
+2. **No Partial Progress**
+   - You get all sub-ops’ results together at the end of each “batch_execute.”
+3. **Must Use a Real MCP Server**
+   - If you spawn or connect to the aggregator itself, you’ll see “tool not found.” The aggregator only has “batch_execute.”
+4. **One Target Server per Call**
+   - Each aggregator call references a single target MCP server. If you want multiple servers, you’d do more advanced logic or separate calls.
 
 ---
 
-## Installation
-
-Currently, this is only available as a GitHub repository. Clone directly:
+## Installation & Startup
 
 ```bash
-git clone https://github.com/{userName}/mcp-batchit.git
+git clone https://github.com/ryanjoachim/mcp-batchit.git
 cd mcp-batchit
-```
-
-Then install dependencies and run:
-
-```bash
 npm install
+npm run build
 npm start
 ```
 
-It listens on **STDIO** by default, so an AI agent (like Cline) can spawn it and communicate via standard in/out.
+BatchIt starts on **STDIO** by default so your AI agent (or any MCP client) can spawn it. For example:
+
+```
+mcp-batchit is running on stdio. Ready to batch-execute!
+```
+
+You can now send JSON-RPC requests (`tools/call` method, `name= "batch_execute"`) to it.
 
 ---
 
-## Usage Example (Filesystem Workflow)
+## MEMORY BANK
 
-Below is a **fully accurate** depiction of a **multi‐step, "real‐world"** workflow using `mcp-batchit` **as it exists today**. It shows the **actual** pattern you'd use, based on current functionality and limitations—**multiple** aggregator calls when a later step depends on the actual run‐time output of an earlier step.
+Using Cline/Roo Code, you can build a framework of contextual project documentation by leveraging the powerful "Memory Bank" custom instructions developed by Nick Baumann.
 
-### Why Multiple Calls Are Needed
+[View Memory Bank Documentation](https://github.com/nickbaumann98/cline_docs/blob/main/prompting/custom%20instructions%20library/cline-memory-bank.md)
 
-- **mcp-batchit** can run **many** sub‐operations in a single request, but it does **not** pass output from sub‐op #1 to sub‐op #2 inside that same request. (In Progress)
-- If sub‐op #2's arguments depend on **real** results from sub‐op #1 (e.g., file paths discovered by a search), you must do **two separate aggregator calls**—so the LLM or agent can see the results and form the next call with the correct arguments.
+#### Traditional Approach (19+ calls):
 
-### Example: Copying & Editing Files With Real Dependencies
+1. Read package.json
+2. Wait for response
+3. Read README.md
+4. Wait for response
+5. List code definitions
+6. Wait for response
+7. Create memory-bank directory
+8. Wait for response
+9. Write productContext.md
+10. Write systemPatterns.md
+11. Write techContext.md
+12. Write progress.md
+13. Write activeContext.md
+14. Wait for responses (5 more calls)
 
-**Goal**: We want to copy the entire folder `C:\Users\{userName}\Documents\projects\{projectName}` to `C:\Users\{userName}\Documents\GitHub\{projectName}`, **excluding** certain items (`node_modules`, `build`, `package-lock.json`) and then edit references in the newly created files. We'll also verify the final structure.
+Total: ~19 separate API calls (13 operations + 6 response waits)
 
-#### PHASE 1: Discover What Files We Need
+#### BatchIt Approach (1-3 calls)
 
-We do a **single** `batch_execute` call containing sub‐operations that **don't** depend on each other's outputs:
+### Multi-Phase Usage
 
-**(Call 1)**
+When working with complex multi-step tasks that depend on real-time output (such as reading files and generating documentation), you'll need to handle the process in distinct phases. This is necessary because **BatchIt** doesn't support data passing between sub-operations within the same request.
+
+### Implementation Phases
+
+#### Information Gathering
+
+In this initial phase, we gather information from the filesystem by reading necessary files (e.g., `package.json`, `README.md`). This is accomplished through a **batch_execute** call to the filesystem MCP server:
+
 ```jsonc
 {
   "targetServer": {
@@ -158,202 +153,157 @@ We do a **single** `batch_execute` call containing sub‐operations that **don't
     "serverType": {
       "type": "filesystem",
       "config": {
-        "rootDirectory": "C:\\Users\\{userName}\\Documents"
+        "rootDirectory": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit"
       }
     },
     "transport": {
       "type": "stdio",
-      "command": "npx",
+      "command": "cmd.exe",
       "args": [
+        "/c",
+        "npx",
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "C:\\Users\\{userName}\\Documents",
-        "C:\\Users\\{userName}\\Desktop"
+        "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit"
       ]
     }
   },
   "operations": [
-    // Phase A.1: Verify permissions
     {
-      "tool": "list_allowed_directories",
-      "arguments": {}
-    },
-    // Phase A.2: Find all copyable files (excluding artifacts)
-    {
-      "tool": "search_files",
+      "tool": "read_file",
       "arguments": {
-        "path": "C:\\Users\\{userName}\\Documents\\projects\\{projectName}",
-        "pattern": "*",
-        "excludePatterns": ["node_modules", "build", "package-lock.json"]
+        "path": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit/package.json"
+      }
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit/README.md"
       }
     }
   ],
   "options": {
     "maxConcurrent": 2,
-    "timeoutMs": 30000,
-    "stopOnError": false
+    "stopOnError": true,
+    "timeoutMs": 30000
   }
 }
 ```
 
-**Why This Must Be Its Own Call**
-- We **don't** know which files exist or whether we have permission.
-- The aggregator returns two sub-results:
-  1. A list of allowed directories
-  2. An array of matching files/dirs from `search_files`.
+**Note**: The aggregator spawns `@modelcontextprotocol/server-filesystem` (via `npx`) to execute parallel `read_file` operations.
 
-**We can't** use these results for a "read_multiple_files" operation in the same batch, because `mcp-batchit` doesn't pass sub‐operation #1's output to sub‐operation #2 (Yet!).
+#### LLM‐Only Step (List Code Definitions)
 
-#### PHASE 2: Create Destination & Read Discovered Files
+This phase involves processing outside the aggregator, typically using LLM or AI agent capabilities:
 
-Now that we have the **actual** file listing from Phase 1's **search_files** output back from the Agent or LLM, we can feed them into our next aggregator call:
+```typescript
+<list_code_definition_names>
+<path>src</path>
+</list_code_definition_names>
+```
 
-**(Call 2)**
+This step utilizes Roo Code's `list_code_definition_names` tool, which is exclusively available to LLMs. However, note that many MCP servers can provide similar functionality, making it possible to complete this process without LLM requests.
+
+#### Document Creation
+
+The final phase combines data from previous steps (file contents and code definitions) to generate documentation in the `memory-bank` directory:
+
 ```jsonc
 {
   "targetServer": {
     "name": "filesystem",
-    "serverType": { ... same as before ... },
-    "transport": { ... same as before ... }
+    "serverType": {
+      "type": "filesystem",
+      "config": {
+        "rootDirectory": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit"
+      }
+    },
+    "transport": {
+      "type": "stdio",
+      "command": "cmd.exe",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit"
+      ]
+    }
   },
   "operations": [
-    // 1) create the destination folder(s)
     {
       "tool": "create_directory",
       "arguments": {
-        "path": "C:\\Users\\{userName}\\Documents\\GitHub\\{projectName}"
+        "path": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit/memory-bank"
       }
     },
-    // 2) read all known source files from the search_files result
     {
-      "tool": "read_multiple_files",
+      "tool": "write_file",
       "arguments": {
-        "paths": [
-          // filled in from the output of Phase 1's "search_files"
-          "C:\\Users\\{userName}\\Documents\\projects\\{projectName}\\README.md",
-          "C:\\Users\\{userName}\\Documents\\projects\\{projectName}\\src\\index.js"
-          // ...
-        ]
+        "path": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit/memory-bank/productContext.md",
+        "content": "# MCP BatchIt Product Context\\n\\n## Purpose\\n..."
+      }
+    },
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit/memory-bank/systemPatterns.md",
+        "content": "# MCP BatchIt System Patterns\\n\\n## Architecture Overview\\n..."
+      }
+    },
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit/memory-bank/techContext.md",
+        "content": "# MCP BatchIt Technical Context\\n\\n## Technology Stack\\n..."
+      }
+    },
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit/memory-bank/progress.md",
+        "content": "# MCP BatchIt Progress Status\\n\\n## Completed Features\\n..."
+      }
+    },
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit/memory-bank/activeContext.md",
+        "content": "# MCP BatchIt Active Context\\n\\n## Current Status\\n..."
       }
     }
   ],
   "options": {
-    "maxConcurrent": 3,
-    "stopOnError": false
+    "maxConcurrent": 1,
+    "stopOnError": true,
+    "timeoutMs": 30000
   }
 }
 ```
 
-**Now** we can read the actual content of each file discovered in Phase 1. This is **two** sub-ops in one aggregator call. They don't rely on each other's outputs. The aggregator runs them in parallel (up to `maxConcurrent` = 3).
-
-#### PHASE 3: Write or Edit the Copied Files
-
-At this point, the LLM has the contents from Phase 2's `read_multiple_files` response. It can decide which lines to modify or reference. Let's assume we want to do line-based edits in the new location:
-
-**(Call 3)**
-```jsonc
-{
-  "targetServer": {
-    "name": "filesystem",
-    "serverType": { ... same as before ... },
-    "transport": { ... same as before ... }
-  },
-  "operations": [
-    // 1) For each file, do an edit_file
-    {
-      "tool": "edit_file",
-      "arguments": {
-        "path": "C:\\Users\\{userName}\\Documents\\GitHub\\{projectName}\\src\\index.js",
-        "edits": [
-          {
-            "oldText": "C:\\Users\\{userName}\\Documents\\projects\\{projectName}",
-            "newText": "C:\\Users\\{userName}\\Documents\\GitHub\\{projectName}"
-          }
-        ]
-      }
-    },
-    {
-      "tool": "edit_file",
-      "arguments": {
-        "path": "C:\\Users\\{userName}\\Documents\\GitHub\\{projectName}\\README.md",
-        "edits": [
-          {
-            "oldText": "some old reference",
-            "newText": "some new reference"
-          }
-        ]
-      }
-    }
-    // etc. (all your edits in one aggregator call)
-  ],
-  "options": {
-    "maxConcurrent": 5,
-    "stopOnError": true
-  }
-}
-```
-
-**In one aggregator call** we do all necessary edits. But we're not reading output from an earlier sub-op in the same call.
-
-#### PHASE 4: Verification
-
-Finally, we can verify the final structure. If we want to confirm the tree plus read some sample files:
-
-**(Call 4)**
-```jsonc
-{
-  "targetServer": {
-    "name": "filesystem",
-    ...
-  },
-  "operations": [
-    {
-      "tool": "directory_tree",
-      "arguments": {
-        "path": "C:\\Users\\{userName}\\Documents\\GitHub\\{projectName}"
-      }
-    },
-    {
-      "tool": "read_multiple_files",
-      "arguments": {
-        "paths": [
-          "C:\\Users\\{userName}\\Documents\\GitHub\\{projectName}\\README.md",
-          "C:\\Users\\{userName}\\Documents\\GitHub\\{projectName}\\src\\index.js"
-        ]
-      }
-    }
-  ]
-}
-```
-
-The aggregator returns both sub-results in a single call. We see the structure from `directory_tree` and final file contents from `read_multiple_files`.
-
-### Key Takeaways
-
-1. **If a later sub‐op truly depends on the runtime output from an earlier sub‐op** → you do **multiple** aggregator calls.
-2. **In each aggregator call**, you can still batch sub-ops that **don't** rely on each other (like create_directory + read_multiple_files).
-3. This approach reduces overhead compared to calling each sub-op individually from the LLM, but it's **not** a pipeline system; the aggregator doesn't pass data from sub-op #1 to sub-op #2 automatically (Yet!).
-
-**Hence**: The examples are broken into **phases**—**4** separate calls—reflecting **real-world** usage. That's how it's actually done with `mcp-batchit` in its current form.
+The aggregator processes these operations sequentially (`maxConcurrent=1`), creating the directory and writing multiple documentation files. The result array indicates the success/failure status of each operation.
 
 ---
 
-## FAQ / Notes
+## FAQ
 
-1. **Can it pass the results of `search_files` directly to `read_multiple_files`?**
-   - No—the aggregator doesn't do automatic data-passing (Yet!). If you need search results to determine which files to read, that requires two separate aggregator calls.
+**Q1: Do I need multiple aggregator calls if sub-op #2 depends on sub-op #1’s results?**
+**Yes.** BatchIt doesn’t pass data between sub-ops in the same request. You do multi-phase calls (like the example above).
 
-2. **What if I want partial progress or partial results?**
-   - Currently, everything returns in one shot. No incremental progress is built in. (In progress!)
+**Q2: Why do I get “Tool create_directory not found” sometimes?**
+Because your `transport` might be pointing to the aggregator script itself instead of the real MCP server. Make sure you reference something like `@modelcontextprotocol/server-filesystem`.
 
-3. **Does `batch_execute` replicate advanced pipeline logic?**
-   - No. We simply let you run multiple sub-operations in parallel or up to `maxConcurrent`. If you need fine-grained conditional branching, you can do multiple "batch_execute" calls in multiple steps.
+**Q3: Can I do concurrency plus stopOnError?**
+Absolutely. If a sub-op fails, we skip launching new sub-ops. Already-running ones finish in parallel.
 
-4. **Where do these sub-tools (search_files, read_multiple_files, etc.) come from?**
-   - They're provided by the "filesystem" MCP server (`@modelcontextprotocol/server-filesystem`). BatchIt just calls them behind the scenes to remove complexity from the LLM's perspective.
+**Q4: Does BatchIt re-spawn the target server each time?**
+It *can* if you specify `keepAlive: false`. But if you use the same exact `targetServer.name + transport`, it caches the connection until an idle timeout passes.
+
+**Q5: Are partial results returned if an error occurs in the middle?**
+Yes. Each sub-op that finished prior to the error is included in the final aggregator response, along with the failing sub-op. Remaining sub-ops are skipped if `stopOnError` is true.
 
 ---
 
 ## License
 
-MIT
+**MIT**
