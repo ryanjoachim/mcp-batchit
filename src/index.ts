@@ -55,8 +55,7 @@ const SELF_REFERENCE_PATTERNS = [
   "@modelcontextprotocol/server-batchit",
   "mcp-batchit",
   "batchit",
-  "server-batchit",
-  "batchit-internal" // Add to prevent self-reference in provider configs
+  "server-batchit"
 ]
 
 // -----------------------------
