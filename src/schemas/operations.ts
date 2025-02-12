@@ -58,7 +58,7 @@ export const EditFileArgsSchema = z.object({
 })
 
 export const CreateDirectoryArgsSchema = z.object({
-  path: AbsolutePathSchema
+  paths: z.union([AbsolutePathSchema, z.array(AbsolutePathSchema)])
 })
 
 export const ListDirectoryArgsSchema = z.object({

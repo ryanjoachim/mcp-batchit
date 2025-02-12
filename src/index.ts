@@ -747,8 +747,8 @@ class BatchExecutor {
           if (!parsed.success) {
             throw new Error(`Invalid arguments: ${parsed.error}`)
           }
-          await createDirectoryOp(parsed.data.path, validationConfig)
-          result = `Successfully created directory ${parsed.data.path}`
+          await createDirectoryOp(parsed.data.paths, validationConfig)
+          result = `Successfully created directory ${parsed.data.paths}`
           break
         }
         case "list_directory": {

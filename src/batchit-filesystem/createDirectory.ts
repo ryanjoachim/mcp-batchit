@@ -1,15 +1,27 @@
-
 import fs from "fs/promises"
 import { validatePathInProcess, type PathValidationConfig } from "./validation.js"
 
 /**
- * Creates a new directory, including parent directories if needed.
- * Succeeds silently if the directory already exists.
+ * Creates one or more directories, including parent directories if needed.
+ * Continues creating directories if some fail, then reports all errors together.
  */
 export async function createDirectoryOp(
-  dirPath: string,
+  paths: string | string[],
   config: PathValidationConfig
 ): Promise<void> {
-  const validPath = await validatePathInProcess(dirPath, config)
-  await fs.mkdir(validPath, { recursive: true })
+  const pathsToCreate = Array.isArray(paths) ? paths : [paths]
+  const errors: string[] = []
+
+  for (const path of pathsToCreate) {
+    try {
+      const validPath = await validatePathInProcess(path, config)
+      await fs.mkdir(validPath, { recursive: true })
+    } catch (error) {
+      errors.push(`Failed to create directory '${path}': ${(error as Error).message}`)
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new Error(errors.join('\n'))
+  }
 }
