@@ -29,3 +29,5 @@ yarn-error.log*
 # Environment variables
 .env
 .env.*
+repomix.config.json
+repomix-output.txt
