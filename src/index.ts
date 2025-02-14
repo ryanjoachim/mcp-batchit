@@ -55,7 +55,7 @@ const SELF_REFERENCE_PATTERNS = [
   "@modelcontextprotocol/server-batchit",
   "mcp-batchit",
   "batchit",
-  "server-batchit"
+  "server-batchit",
 ]
 
 // -----------------------------
@@ -188,17 +188,23 @@ const ServerTypeSchema = z.discriminatedUnion("type", [
       .object({
         rootDirectory: z
           .string()
-          .describe("Required - base directory (Absolute Path) for all filesystem operations"),
+          .describe(
+            "Required - base directory (Absolute Path) for all filesystem operations"
+          ),
         permissions: z
           .string()
           .optional()
           .describe("Optional - currently unused"),
         watchMode: z.boolean().optional().describe("Optional - for future use"),
-        provider: z.enum(["batchit-internal", "external"])
-          .describe("Provider type - internal ('batchit-internal') or external ('external') filesystem"),
+        provider: z
+          .enum(["batchit-internal", "external"])
+          .describe(
+            "Provider type - internal ('batchit-internal') or external ('external') filesystem"
+          ),
       })
       .refine((data) => !!data.rootDirectory, {
-        message: "rootDirectory (Absolute Path) is required for filesystem server type",
+        message:
+          "rootDirectory (Absolute Path) is required for filesystem server type",
         path: ["rootDirectory"],
       })
       .refine((data) => !!data.provider, {
@@ -253,25 +259,30 @@ export interface OperationResult {
 }
 
 const BatchArgsSchema = z.object({
-  targetServer: z.object({
-    name: z.string(),
-    serverType: ServerTypeSchema,
-    transport: TransportConfigSchema.optional(),
-    maxIdleTimeMs: z.number().optional(),
-  }).refine(
-    (data) => {
-      // Transport is required for external filesystem providers
-      if (data.serverType.type === "filesystem" &&
-          data.serverType.config.provider === "external") {
-        return !!data.transport;
+  targetServer: z
+    .object({
+      name: z.string(),
+      serverType: ServerTypeSchema,
+      transport: TransportConfigSchema.optional(),
+      maxIdleTimeMs: z.number().optional(),
+    })
+    .refine(
+      (data) => {
+        // Transport is required for external filesystem providers
+        if (
+          data.serverType.type === "filesystem" &&
+          data.serverType.config.provider === "external"
+        ) {
+          return !!data.transport
+        }
+        return true
+      },
+      {
+        message:
+          "Transport configuration is required for external filesystem providers",
+        path: ["transport"],
       }
-      return true;
-    },
-    {
-      message: "Transport configuration is required for external filesystem providers",
-      path: ["transport"]
-    }
-  ),
+    ),
   operations: z.array(
     z.object({
       tool: z.string(),
@@ -385,7 +396,7 @@ class ConnectionManager {
     }
     const transport = await this.createTransport(identity)
     const client = new Client(
-      { name: "mcp-batchit", version: "1.1.0" },
+      { name: "mcp-batchit", version: "1.1.1" },
       { capabilities: {} }
     )
     await client.connect(transport)
@@ -401,29 +412,31 @@ class ConnectionManager {
     return connection
   }
 
-  private getTransportConfig(identity: ServerIdentity): TransportConfig | undefined {
+  private getTransportConfig(
+    identity: ServerIdentity
+  ): TransportConfig | undefined {
     if (identity.serverType.type !== "filesystem") {
-      return identity.transport;
+      return identity.transport
     }
 
-    const { provider } = identity.serverType.config;
+    const { provider } = identity.serverType.config
 
     if (provider === "external" && !identity.transport) {
       throw new TransportError(
         TransportErrorType.ConfigurationInvalid,
         "Transport configuration is required for external filesystem providers"
-      );
+      )
     }
 
     if (provider === "batchit-internal") {
       return {
         type: "stdio",
         command: "node",
-        args: [process.argv[1]]
-      };
+        args: [process.argv[1]],
+      }
     }
 
-    return identity.transport;
+    return identity.transport
   }
 
   private async createTransport(
@@ -787,8 +800,15 @@ class BatchExecutor {
           }
           const found = await searchFilesOp(
             parsed.data.path,
-            parsed.data.pattern,
-            parsed.data.excludePatterns,
+            {
+              pattern: parsed.data.pattern,
+              excludePatterns: parsed.data.excludePatterns,
+              useGlob: parsed.data.useGlob,
+              useRegex: parsed.data.useRegex,
+              caseSensitive: parsed.data.caseSensitive,
+              wholeWord: parsed.data.wholeWord,
+              maxConcurrent: parsed.data.maxConcurrent,
+            },
             validationConfig
           )
           result = found.length ? found : "No matches found"
@@ -853,7 +873,7 @@ class BatchExecutor {
     transport: TransportConfig | undefined
   ): number {
     if (!transport) {
-      return baseTimeout;
+      return baseTimeout
     }
 
     if (
@@ -1108,7 +1128,7 @@ export const batchExecutor = new BatchExecutor(connectionManager)
 
 export const server = new McpServer({
   name: "mcp-batchit",
-  version: "1.1.0",
+  version: "1.1.1",
 })
 
 // Add the "batch_execute" tool
@@ -1123,7 +1143,7 @@ server.tool(
   `# BatchIt Batch Execute Tool
 
 ## Requirements
-- All file paths MUST be absolute
+- ALL FILE PATHS MUST BE ABSOLUTE PATHS
 - Valid target server configuration required with specified provider type
 - Transport configuration required only for external providers
 - Internal BatchIt providers don't need transport configuration
@@ -1143,7 +1163,7 @@ server.tool(
 - transport: (Required only for external providers)
   * stdio:
     - Requires command and args
-    - Optional npxDownload flag for NPM package installation (+90s timeout)
+    - Optional "npxDownload" flag for NPM package installation (+90s timeout)
     - Environment variables via env object
     - Automatic +30s timeout for process startup
   * websocket:
@@ -1205,10 +1225,20 @@ Array of operations to execute:
     }
   },
   "operations": [
+  {
+      "tool": "create_directory",
+      "arguments": {
+        "paths": [
+          "/absolute/path/to/project/docs",
+          "/absolute/path/to/project/src",
+          "/absolute/path/to/project/tests"
+        ]
+      }
+    },
     {
       "tool": "read_file",
       "arguments": {
-        "path": "[absolutePath/to/file.txt]",
+        "path": "[absolutePath/to/project/src/file.txt]",
         "options": {
           "encoding": "utf-8",
           "addLineNumbers": true,
@@ -1469,9 +1499,9 @@ Update modes with validation:
           type: "filesystem",
           config: {
             rootDirectory: process.cwd(),
-            provider: "batchit-internal"
+            provider: "batchit-internal",
           },
-        }
+        },
       }
 
       const results = await batchExecutor.executeBatch(
