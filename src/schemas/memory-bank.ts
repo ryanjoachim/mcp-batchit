@@ -1,11 +1,8 @@
+
 import { z } from "zod"
 import { AbsolutePathSchema } from "./paths.js"
-
-export interface MemoryBankRequest extends Record<string, unknown> {
-  _meta?: {
-    progressToken?: string | number
-  }
-}
+// import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
+import { validateMarkdownContent } from "../mem-bank/utils/validation.js"
 
 const BaseRequestParamsSchema = z
   .object({
@@ -19,41 +16,6 @@ const BaseRequestParamsSchema = z
   })
   .passthrough()
 
-export interface MemoryBankUpdate extends Record<string, unknown> {
-  file: string
-  mode: "overwrite" | "append" | "diff" | "edit"
-  newContent?: string
-  diff?: Array<{
-    line: number
-    operation: "insert" | "replace" | "delete"
-    text?: string
-    preserveIndent?: boolean
-  }>
-  edits?: Array<{
-    oldText: string
-    newText: string
-    matchCase?: boolean
-    wholeWord?: boolean
-  }>
-  validation?: {
-    markdown?: boolean
-    requireHeader?: boolean
-    validateContent?: boolean
-  }
-}
-
-const markdownContentValidator = z.string().refine(
-  (content) => {
-    if (!content.trim().startsWith("#")) return false
-    if (!content.includes("\n\n")) return false
-    return true
-  },
-  {
-    message:
-      "Memory Bank files must start with a heading and contain at least one content section",
-  }
-)
-
 export const MemoryBankUpdateSchema = z.object({
   file: AbsolutePathSchema,
   mode: z.enum(["overwrite", "append", "diff", "edit"]).default("overwrite"),
@@ -63,7 +25,12 @@ export const MemoryBankUpdateSchema = z.object({
     .refine(
       (content) => {
         if (!content) return true
-        return markdownContentValidator.safeParse(content).success
+        try {
+          validateMarkdownContent(content)
+          return true
+        } catch (error) {
+          return false
+        }
       },
       { message: "Invalid markdown content structure" }
     ),
@@ -105,6 +72,8 @@ export const MemoryBankToolSchema = BaseRequestParamsSchema.extend({
     "update",
   ]),
   directory: AbsolutePathSchema,
+  files: z.array(AbsolutePathSchema).optional(),
+  updates: z.array(MemoryBankUpdateSchema).optional(),
   options: z
     .object({
       backup: z.boolean().default(false),
@@ -112,6 +81,13 @@ export const MemoryBankToolSchema = BaseRequestParamsSchema.extend({
       atomic: z.boolean().default(false),
     })
     .optional(),
-  files: z.array(AbsolutePathSchema).optional(),
-  updates: z.array(MemoryBankUpdateSchema).optional(),
 })
+
+// Re-export types that match the schema
+export interface MemoryBankRequest extends Record<string, unknown> {
+  _meta?: {
+    progressToken?: string | number
+  }
+}
+
+export interface MemoryBankUpdate extends z.infer<typeof MemoryBankUpdateSchema> {}

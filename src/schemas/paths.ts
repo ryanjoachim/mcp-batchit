@@ -1,81 +1,45 @@
+
 import { z } from "zod"
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
 import { validatePathFormat } from "../utils/pathUtils.js"
 
-const PathBaseSchema = z.string().min(1, "Path cannot be empty")
+const PathValidationOptionsSchema = z.object({
+  requireAbsolute: z.boolean().default(true),
+  rootDirectory: z.string().optional(),
+  maxLength: z.number().default(260),
+  allowedExtensions: z.array(z.string()).optional(),
+  checkSymlinks: z.boolean().default(true),
+  validateMarkdown: z.boolean().default(false),
+  requireHeader: z.boolean().default(false),
+  cacheStats: z.boolean().default(false)
+})
 
-/**
- * Schema for absolute paths with basic validation
- */
-export const AbsolutePathSchema = PathBaseSchema.refine(
+export const AbsolutePathSchema = z.string().min(1).refine(
   (p) => {
     try {
       validatePathFormat(p)
       return true
-    } catch (error) {
+    } catch {
       return false
     }
   },
-  {
-    message: "Invalid path format",
-  }
+  { message: "Invalid path format" }
 )
 
-/**
- * Schema for filesystem server configuration
- */
+export const PathValidationSchema = z.object({
+  path: AbsolutePathSchema,
+  options: PathValidationOptionsSchema.optional()
+})
+
+export const MemoryBankPathSchema = PathValidationSchema.extend({
+  options: PathValidationOptionsSchema.extend({
+    validateMarkdown: z.boolean().default(true),
+    requireHeader: z.boolean().default(true),
+    allowedExtensions: z.array(z.string()).default(['.md'])
+  })
+})
+
 export const FileSystemConfigSchema = z.object({
   rootDirectory: AbsolutePathSchema,
   provider: z.enum(["batchit-internal", "external"]),
-  maxPathLength: z.number().optional().default(260),
-  allowedExtensions: z.array(z.string()).optional(),
-  disallowedCharacters: z.instanceof(RegExp).optional(),
+  pathValidation: PathValidationOptionsSchema.optional()
 })
-
-/**
- * Schema for server transport configuration
- */
-export const TransportConfigSchema = z
-  .object({
-    type: z.enum(["stdio", "websocket"]),
-    command: z.string().optional(),
-    args: z.array(z.string()).optional(),
-    url: z.string().optional(),
-    options: z.record(z.unknown()).optional(),
-  })
-  .optional()
-
-/**
- * Complete server configuration schema
- */
-export const ServerConfigSchema = z.object({
-  name: z.string(),
-  serverType: z.object({
-    type: z.literal("filesystem"),
-    config: FileSystemConfigSchema,
-  }),
-  transport: TransportConfigSchema,
-})
-
-/**
- * Validates a path string against operation-specific rules
- */
-export function validatePath(filePath: string, operation: string): string {
-  const result = AbsolutePathSchema.safeParse(filePath)
-  if (!result.success) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      `Invalid path for ${operation}: ${result.error.errors
-        .map((e) => e.message)
-        .join(", ")}`
-    )
-  }
-  return result.data
-}
-
-/**
- * Validates an array of paths against operation-specific rules
- */
-export function validatePaths(paths: string[], operation: string): string[] {
-  return paths.map((p) => validatePath(p, operation))
-}

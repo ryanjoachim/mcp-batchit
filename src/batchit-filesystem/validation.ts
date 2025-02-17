@@ -14,6 +14,7 @@ import { validatePath } from "../utils/pathUtils.js"
 export interface PathValidationConfig {
   rootDirectory: string
   excludedDirs?: string[]
+  bypassRootCheck?: boolean
 }
 
 /**
@@ -31,7 +32,8 @@ export async function validatePathInProcess(
   const validated = await validatePath(filePath, {
     requireAbsolute: true,
     rootDirectory,
-    checkSymlinks: true
+    checkSymlinks: true,
+    bypassRootCheck: config.bypassRootCheck
   })
 
   // Additional check for excluded directories

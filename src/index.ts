@@ -14,7 +14,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js"
 import { ChildProcess } from "child_process"
 //import * as fs from "fs/promises"
-import * as path from "path"
+// import * as path from "path"
 import { existsSync } from "fs"
 import { isAbsolute } from "path"
 
@@ -43,8 +43,9 @@ import {
   PathValidationConfig,
 } from "./batchit-filesystem/index.js"
 
-// Import the memory bank schema
+// Import the memory bank schema and implementation
 import { MemoryBankToolSchema } from "./schemas/memory-bank.js"
+import { MemoryBank } from "./mem-bank/index.js"
 
 // Self-reference blocklist:
 const SELF_REFERENCE_PATTERNS = [
@@ -834,15 +835,9 @@ class BatchExecutor {
           if (!parsed.success) {
             throw new Error(parsed.error.message)
           }
-          const { operation, directory, files, updates } = parsed.data
-          // dispatch to a helper that does the actual logic
-          result = await handleMemoryBankOps(
-            operation,
-            directory,
-            files,
-            updates,
-            validationConfig
-          )
+          // Use the new MemoryBank implementation
+          const bank = new MemoryBank()
+          result = await bank.execute(parsed.data, validationConfig)
           break
         }
 
@@ -1360,13 +1355,9 @@ Array of operations to execute:
 )
 
 // --------------
-// Memory Bank
+// Memory Bank Integration
 // --------------
-/**
- * We define the memory_bank tool as a user-facing tool,
- * referencing 'MemoryBankToolSchema' to parse arguments,
- * then we just pass them to the aggregator's local logic by running a single sub-op.
- */
+import { MemoryBankController } from './mem-bank/controllers/memory-bank.controller.js';
 server.tool(
   "memory_bank",
   `# Memory Bank Tool
@@ -1491,46 +1482,23 @@ Update modes with validation:
       throw new McpError(ErrorCode.InvalidParams, parsed.error.message)
     }
 
-    // Execute through BatchExecutor to ensure proper path validation
     try {
-      const serverIdentity: ServerIdentity = {
-        name: "memory-bank-local",
-        serverType: {
-          type: "filesystem",
-          config: {
-            rootDirectory: process.cwd(),
-            provider: "batchit-internal",
-          },
-        },
-      }
+      const controller = new MemoryBankController();
+      const validationConfig = {
+        rootDirectory: process.cwd(),
+        excludedDirs: ['/private/data', '/secret/hidden']
+      };
 
-      const results = await batchExecutor.executeBatch(
-        serverIdentity,
-        [
-          {
-            tool: "memory_bank",
-            arguments: parsed.data,
-          },
-        ],
-        {
-          maxConcurrent: 1,
-          timeoutMs: 30000,
-          stopOnError: true,
-        }
-      )
-
-      if (!results[0]?.success) {
-        throw new Error(results[0]?.error || "Memory bank operation failed")
-      }
+      const result = await controller.handleRequest(parsed.data, validationConfig);
 
       return {
         content: [
           {
-            type: "text",
-            text: JSON.stringify(results[0].result, null, 2),
-          },
-        ],
-      }
+            type: 'text',
+            text: JSON.stringify(result, null, 2)
+          }
+        ]
+      };
     } catch (error) {
       throw new McpError(
         ErrorCode.InternalError,
@@ -1544,329 +1512,8 @@ Update modes with validation:
 // Memory Bank Operation Implementation
 // -----------------------------------------
 
-/**
- * The required memory bank files as per your instructions.
- */
-const REQUIRED_MEMORY_BANK_FILES = [
-  "productContext.md",
-  "activeContext.md",
-  "systemPatterns.md",
-  "techContext.md",
-  "progress.md",
-]
+// Memory Bank operations moved to src/mem-bank/
 
-async function handleMemoryBankOps(
-  operation: string,
-  directory: string,
-  files: string[] | undefined,
-  updates:
-    | Array<{
-        file: string
-        mode: "overwrite" | "append" | "diff" | "edit"
-        newContent?: string
-        diff?: Array<{
-          line: number
-          operation: "insert" | "replace" | "delete"
-          text?: string
-        }>
-        edits?: Array<{ oldText: string; newText: string }>
-      }>
-    | undefined,
-  validationConfig: PathValidationConfig
-) {
-  switch (operation) {
-    case "initialize":
-      return await opInitialize(directory, validationConfig)
-
-    case "verify_and_read":
-      return await opVerifyAndRead(directory, files, validationConfig)
-
-    case "just_read":
-      return await opJustRead(directory, files, validationConfig)
-
-    case "list":
-      return await opListDirectory(directory, validationConfig)
-
-    case "update":
-      return await opUpdate(directory, updates, validationConfig)
-
-    default:
-      throw new Error(`Unknown memory_bank operation: ${operation}`)
-  }
-}
-
-/**
- * Read and process a template file, replacing any template variables.
- * Uses relative paths from the project root to locate templates.
- */
-async function processTemplate(
-  templateFile: string,
-  validationConfig: PathValidationConfig
-): Promise<string> {
-  const templatePath = path.join("src", "templates", templateFile)
-  try {
-    const content = await readFileOp(templatePath, validationConfig)
-    // Replace template variables with current values
-    return content.replace(
-      /\$\{new Date\(\)\.toISOString\(\)\}/g,
-      new Date().toISOString()
-    )
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    console.error(
-      `Template processing error for ${templateFile}: ${errorMessage}`
-    )
-    // Return a structured default template with clear indication it's a fallback
-    return [
-      `# ${path.basename(templateFile, ".md")}`,
-      "",
-      "> NOTE: This is a default template. The original template file could not be loaded.",
-      "",
-      "## Overview",
-      "",
-      "[Add content here]",
-      "",
-      `Last Updated: ${new Date().toISOString()}`,
-      "Version: 1.0",
-      "",
-    ].join("\n")
-  }
-}
-
-async function opInitialize(
-  directory: string,
-  validationConfig: PathValidationConfig
-) {
-  // create dir if missing
-  try {
-    await listDirectoryOp(directory, validationConfig)
-  } catch {
-    await createDirectoryOp(directory, validationConfig)
-  }
-  // create required files if missing
-  for (const rf of REQUIRED_MEMORY_BANK_FILES) {
-    const fp = path.join(directory, rf)
-    try {
-      await readFileOp(fp, validationConfig)
-    } catch {
-      // Use template instead of placeholder
-      const content = await processTemplate(rf, validationConfig)
-      await writeFileOp(fp, content, validationConfig)
-    }
-  }
-  return "Memory bank initialized with templates. Required files exist."
-}
-
-async function opVerifyAndRead(
-  directory: string,
-  files: string[] | undefined,
-  validationConfig: PathValidationConfig
-) {
-  // create dir if missing
-  try {
-    await listDirectoryOp(directory, validationConfig)
-  } catch {
-    await createDirectoryOp(directory, validationConfig)
-  }
-
-  // ensure required
-  for (const rf of REQUIRED_MEMORY_BANK_FILES) {
-    const fp = path.join(directory, rf)
-    try {
-      await readFileOp(fp, validationConfig)
-    } catch {
-      // Use template instead of placeholder
-      const content = await processTemplate(rf, validationConfig)
-      await writeFileOp(fp, content, validationConfig)
-    }
-  }
-  const toRead = files?.length ? files : REQUIRED_MEMORY_BANK_FILES
-  const results: Record<string, string> = {}
-  for (const f of toRead) {
-    const fp = path.join(directory, f)
-    try {
-      await readFileOp(fp, validationConfig)
-    } catch {
-      // auto-create
-      await writeFileOp(fp, `# ${f}\n\n(Auto-created)\n`, validationConfig)
-    }
-    results[f] = await readFileOp(fp, validationConfig)
-  }
-  return {
-    message: "verify_and_read success",
-    filesRead: Object.keys(results),
-    data: results,
-  }
-}
-
-async function opJustRead(
-  directory: string,
-  files: string[] | undefined,
-  validationConfig: PathValidationConfig
-) {
-  const toRead = files?.length ? files : REQUIRED_MEMORY_BANK_FILES
-  const results: Record<string, string> = {}
-  for (const f of toRead) {
-    const fp = path.join(directory, f)
-    try {
-      results[f] = await readFileOp(fp, validationConfig)
-    } catch {
-      throw new Error(`File "${f}" is missing in 'just_read' mode.`)
-    }
-  }
-  return {
-    message: "just_read success",
-    filesRead: Object.keys(results),
-    data: results,
-  }
-}
-
-async function opListDirectory(
-  directory: string,
-  validationConfig: PathValidationConfig
-) {
-  // fail if dir missing
-  try {
-    await listDirectoryOp(directory, validationConfig)
-  } catch {
-    throw new Error(`Directory "${directory}" does not exist, cannot list.`)
-  }
-  const treeJson = await directoryTreeOp(directory, validationConfig)
-  const tree = JSON.parse(treeJson)
-  return {
-    message: "Memory Bank directory tree",
-    directory,
-    data: tree,
-  }
-}
-
-async function opUpdate(
-  directory: string,
-  updates:
-    | Array<{
-        file: string
-        mode: "overwrite" | "append" | "diff" | "edit"
-        newContent?: string
-        diff?: Array<{
-          line: number
-          operation: "insert" | "replace" | "delete"
-          text?: string
-        }>
-        edits?: Array<{ oldText: string; newText: string }>
-      }>
-    | undefined,
-  validationConfig: PathValidationConfig
-) {
-  if (!updates?.length) {
-    throw new Error("No updates provided for operation='update'")
-  }
-  const results: string[] = []
-
-  for (const upd of updates) {
-    const fp = path.join(directory, upd.file)
-    let existing = ""
-    try {
-      existing = await readFileOp(fp, validationConfig)
-    } catch {
-      existing = ""
-      await writeFileOp(fp, existing, validationConfig)
-    }
-
-    switch (upd.mode) {
-      case "overwrite": {
-        if (!upd.newContent) {
-          throw new Error(
-            `overwrite mode requires newContent for file '${upd.file}'`
-          )
-        }
-        await writeFileOp(fp, upd.newContent, validationConfig)
-        results.push(`Overwrote '${upd.file}'`)
-        break
-      }
-      case "append": {
-        if (!upd.newContent) {
-          throw new Error(
-            `append mode requires newContent for file '${upd.file}'`
-          )
-        }
-        const appended = existing + "\n" + upd.newContent
-        await writeFileOp(fp, appended, validationConfig)
-        results.push(`Appended to '${upd.file}'`)
-        break
-      }
-      case "diff": {
-        if (!upd.diff) {
-          throw new Error(`diff mode requires 'diff' array for '${upd.file}'`)
-        }
-        const finalContent = applyLineDiff(existing, upd.diff)
-        await writeFileOp(fp, finalContent, validationConfig)
-        results.push(`Applied line-based diff to '${upd.file}'`)
-        break
-      }
-      case "edit": {
-        if (!upd.edits?.length) {
-          throw new Error(`edit mode requires 'edits' for '${upd.file}'`)
-        }
-        // Reuse editFileOp logic
-        const diffOutput = await editFileOp(
-          fp,
-          upd.edits,
-          false,
-          validationConfig
-        )
-        results.push(
-          `Partial search/replace on '${upd.file}'. Diff:\n${diffOutput}`
-        )
-        break
-      }
-    }
-  }
-  return { message: "Update completed", results }
-}
-
-function applyLineDiff(
-  existingContent: string,
-  ops: Array<{
-    line: number
-    operation: "insert" | "replace" | "delete"
-    text?: string
-  }>
-) {
-  const lines = existingContent.split("\n")
-  ops.sort((a, b) => a.line - b.line)
-
-  let offset = 0
-  for (const o of ops) {
-    const idx = o.line - 1 + offset
-    switch (o.operation) {
-      case "insert":
-        if (!o.text) continue
-        if (idx < 0) {
-          lines.unshift(o.text)
-          offset++
-        } else if (idx >= lines.length) {
-          lines.push(o.text)
-          offset++
-        } else {
-          lines.splice(idx + 1, 0, o.text)
-          offset++
-        }
-        break
-      case "replace":
-        if (!o.text) continue
-        if (idx < 0 || idx >= lines.length) continue
-        lines[idx] = o.text
-        break
-      case "delete":
-        if (idx < 0 || idx >= lines.length) continue
-        lines.splice(idx, 1)
-        offset--
-        break
-    }
-  }
-
-  return lines.join("\n")
-}
 
 // Startup
 ;(async function main() {

@@ -1,3 +1,4 @@
+
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
 
 export enum PathErrorType {
@@ -6,7 +7,10 @@ export enum PathErrorType {
     InvalidFormat = "InvalidFormat",
     SecurityViolation = "SecurityViolation",
     InvalidSymlink = "InvalidSymlink",
-    BatchProcessingError = "BatchProcessingError"
+    BatchProcessingError = "BatchProcessingError",
+    MarkdownValidation = "MarkdownValidation",
+    ContentStructure = "ContentStructure",
+    MemoryBankOperation = "MemoryBankOperation"
 }
 
 export class PathValidationError extends McpError {
@@ -17,6 +21,10 @@ export class PathValidationError extends McpError {
         super(ErrorCode.InvalidParams, `Path validation error: ${message}`)
         this.name = "PathValidationError"
         Error.captureStackTrace(this, PathValidationError)
+    }
+
+    static create(type: PathErrorType, message: string): PathValidationError {
+        return new PathValidationError(type, message)
     }
 
     static notAbsolute(path: string): PathValidationError {
@@ -54,10 +62,17 @@ export class PathValidationError extends McpError {
         )
     }
 
-    static batchProcessingError(message: string): PathValidationError {
+    static markdownError(path: string, reason: string): PathValidationError {
         return new PathValidationError(
-            PathErrorType.BatchProcessingError,
-            message
+            PathErrorType.MarkdownValidation,
+            `Markdown validation failed - ${reason}: ${path}`
+        )
+    }
+
+    static contentError(path: string, reason: string): PathValidationError {
+        return new PathValidationError(
+            PathErrorType.ContentStructure,
+            `Content structure error - ${reason}: ${path}`
         )
     }
 }
