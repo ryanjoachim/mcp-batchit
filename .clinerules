@@ -1,0 +1,175 @@
+# BatchIt CLI Rules
+
+## Schema-First Development Rules
+
+1. All operations must be schema-defined:
+   - Use Zod for schema definitions
+   - Place schemas in appropriate schema files under src/schemas/
+   - Include TypeScript types derived from schemas
+   - Maintain clear schema documentation
+
+2. Schema Validation Requirements:
+   - All input must be validated against schemas
+   - Use safeParse for validation with clear error messages
+   - Include examples in schema documentation
+   - Test schema validation thoroughly
+
+3. Capability Implementation Rules:
+   - Each capability must be self-contained
+   - Implement standard capability interface
+   - Include schema definitions for capability
+   - Provide comprehensive testing
+
+## File Organization
+
+1. Schema Files:
+   - src/schemas/core.ts: Core type definitions
+   - src/schemas/filesystem.ts: Filesystem schemas
+   - src/schemas/memory-bank.ts: Memory bank schemas
+   - Each schema file must export its types
+
+2. Sub-Operation Structure:
+   - src/subops/index.ts: Registry and interface definitions
+   - src/subops/{operation}SubOp.ts: Individual operation implementations
+   - Each sub-op must follow standard interface with name, schema, description, handler
+   - All sub-ops must be exported in index.ts array
+
+3. Capability Structure:
+   - src/capabilities/{name}/index.ts: Main implementation
+   - src/capabilities/{name}/schema.ts: Capability schemas
+   - src/capabilities/{name}/types.ts: Type definitions
+   - src/capabilities/{name}/docs.ts: Documentation
+
+4. Test Organization:
+   - tests/schemas/: Schema validation tests
+   - tests/capabilities/: Capability tests
+   - Each test file mirrors source structure
+
+## Coding Patterns
+
+1. Sub-Operation Implementation:
+   - Follow SubOp interface definition
+   - Import schemas from appropriate source
+   - Provide clear operation description
+   - Implement type-safe handler
+   - Use proper error handling
+   - Follow naming convention: {operation}SubOp
+   - Register in localFsSubOps array
+
+2. Error Handling:
+   - Use BatchError for all errors
+   - Include error code and details
+   - Provide clear error messages
+   - Add examples to error documentation
+
+3. Validation:
+   - Use Zod schemas for validation
+   - Implement safeParse for all inputs
+   - Include validation in capability methods
+   - Maintain clear validation errors
+
+4. Documentation:
+   - Include JSDoc comments
+   - Provide usage examples
+   - Document schema structures
+   - Maintain capability documentation
+
+## Testing Requirements
+
+1. Schema Tests:
+   - Test all schema validations
+   - Include edge cases
+   - Test error messages
+   - Verify type inference
+
+2. Capability Tests:
+   - Test capability registration
+   - Verify operation execution
+   - Test error conditions
+   - Check resource cleanup
+
+3. Integration Tests:
+   - Test capability interactions
+   - Verify batch operations
+   - Test error propagation
+   - Check performance metrics
+
+## Development Workflow
+
+1. Schema Development:
+   - Define schema first
+   - Add validation tests
+   - Implement runtime validation
+   - Document schema usage
+
+2. Capability Development:
+   - Create capability interface
+   - Implement schema validation
+   - Add capability tests
+   - Document capability usage
+
+3. Integration:
+   - Register capabilities
+   - Implement batch operations
+   - Add integration tests
+   - Update documentation
+
+## Code Style
+
+1. TypeScript Usage:
+   - Use strict type checking
+   - Leverage type inference
+   - Document complex types
+   - Maintain type safety
+
+2. Error Messages:
+   - Clear and actionable
+   - Include context details
+   - Reference documentation
+   - Provide examples
+
+3. Documentation Style:
+   - Clear and concise
+   - Include examples
+   - Document edge cases
+   - Maintain consistency
+
+## Performance Guidelines
+
+1. Validation Performance:
+   - Optimize schema validation
+   - Cache validation results
+   - Monitor validation time
+   - Profile performance
+
+2. Capability Performance:
+   - Efficient resource usage
+   - Smart capability loading
+   - Monitor execution time
+   - Implement cleanup
+
+3. Batch Operation Performance:
+   - Optimize concurrent execution
+   - Manage resource usage
+   - Monitor operation timing
+   - Implement timeouts
+
+## Security Requirements
+
+1. Input Validation:
+   - Validate all inputs
+   - Sanitize data
+   - Check permissions
+   - Verify capabilities
+
+2. Error Safety:
+   - Safe error messages
+   - Secure error details
+   - Clean error stacks
+   - Log security events
+
+3. Resource Security:
+   - Validate paths
+   - Check permissions
+   - Clean up resources
+   - Monitor access

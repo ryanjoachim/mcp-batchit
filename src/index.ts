@@ -1029,9 +1029,8 @@ class BatchExecutor {
     }
 
     // Otherwise, proceed with remote execution:
-    const connection = await this.connectionManager.getOrCreateConnection(
-      identity
-    )
+    const connection =
+      await this.connectionManager.getOrCreateConnection(identity)
     const adjustedTimeout = this.calculateTimeout(
       options.timeoutMs,
       identity.transport
@@ -1137,8 +1136,19 @@ server.tool(
   "batch_execute",
   `# BatchIt Batch Execute Tool
 
+## Core Purpose
+Orchestrates complex file system operations with dependency management, parallel execution, and standardized error handling. This tool serves as the primary interface for executing batched operations across local and remote file systems.
+
+## When to Use
+- Processing multiple file operations in a single batch
+- Managing complex operation dependencies
+- Coordinating parallel file system tasks
+- Interfacing with remote file systems
+- Handling PDF/DOCX content extraction
+- Managing file operation timeouts
+
 ## Requirements
-- ALL FILE PATHS MUST BE ABSOLUTE PATHS
+- All file paths must be absolute paths
 - Valid target server configuration required with specified provider type
 - Transport configuration required only for external providers
 - Internal BatchIt providers don't need transport configuration
@@ -1196,17 +1206,30 @@ Array of operations to execute:
 - stopOnError: Stop on first error (default: false)
 - keepAlive: Maintain connection (default: false)
 
-### File Handling Features
-- PDF text extraction with page separation
-- DOCX content extraction
-- Binary file detection
-- Line number formatting
-- UTF-8 and other encodings
-- Concurrent file operations
+## Key Features
+1. **Operation Orchestration**
+   - Concurrent execution with configurable limits
+   - Dependency resolution between operations
+   - Transaction-like behavior with stopOnError
+   - Progress tracking and summary reporting
 
-## Example Usage
+2. **Server Management**
+   - Local and remote server support
+   - Connection pooling and cleanup
+   - Automatic timeout handling
+   - Error recovery and reconnection
 
-### Internal Provider Example (Simplified)
+3. **File Handling**
+   - PDF text extraction with page separation
+   - DOCX content extraction
+   - Binary file detection
+   - Line number formatting
+   - UTF-8 and other encodings
+   - Concurrent operations
+
+## Examples
+
+### Basic File Operations
 \`\`\`json
 {
   "targetServer": {
@@ -1297,24 +1320,43 @@ Array of operations to execute:
 }
 \`\`\`
 
-## Common Error Prevention
-- All paths must be absolute
-- Server rootDirectory must be absolute
-- Server file paths must be absolute
-- File paths must be within rootDirectory
-- Parent directory references (..) not allowed
+## Error Prevention
+1. Path Validation
+   - All paths must be absolute
+   - Paths must be within rootDirectory
+   - No parent directory (..) references
+   - Binary file safety checks
 
-## Provider Configuration
-- Required provider field for all filesystem operations
-- "batchit-internal":
-  * For local filesystem operations
-  * Transport configuration is optional
-  * Default stdio transport will be used automatically
-- "external":
-  * For remote or external filesystem operations
-  * Transport configuration is mandatory
-  * Must specify valid transport details (stdio or websocket)
-- Validation enforced at schema and runtime levels`,
+2. Server Configuration
+   - Provider validation
+   - Transport requirements check
+   - Connection verification
+   - Timeout handling
+
+3. Operation Safety
+   - Schema validation
+   - Dependency cycle detection
+   - Transform error handling
+   - Concurrent operation limits
+
+## Best Practices
+1. Server Configuration
+   - Use "batchit-internal" for local operations
+   - Configure proper timeouts for remote servers
+   - Set appropriate concurrent operation limits
+   - Implement proper error handling
+
+2. Operation Management
+   - Group related operations with dependencies
+   - Use meaningful operation IDs
+   - Implement proper transform error handling
+   - Monitor operation results
+
+3. Resource Management
+   - Close connections when done (keepAlive: false)
+   - Clean up resources in transforms
+   - Handle timeouts appropriately
+   - Manage concurrent operations`,
   batchToolSchema,
   async (args) => {
     const parsed = BatchArgsSchema.safeParse(args)
@@ -1357,13 +1399,19 @@ Array of operations to execute:
 // --------------
 // Memory Bank Integration
 // --------------
-import { MemoryBankController } from './mem-bank/controllers/memory-bank.controller.js';
+import { MemoryBankController } from "./mem-bank/controllers/memory-bank.controller.js"
 server.tool(
   "memory_bank",
   `# Memory Bank Tool
 
-## IMPORTANT: BatchIt Integration Required
-This tool must be executed through BatchIt's batch_execute tool.
+## Core Purpose
+Provides structured documentation and context management for projects, ensuring consistency and knowledge preservation. It facilitates easy access to project goals, current development focus, system architecture, technical environment, and progress tracking.
+
+## When to Use
+- To initialize a new project documentation structure.
+- To verify and read existing documentation files.
+- To update documentation content with various modes (overwrite, append, diff, edit).
+- To list the memory bank structure and metadata.
 
 ## Requirements
 - All paths MUST be absolute
@@ -1376,18 +1424,77 @@ This tool must be executed through BatchIt's batch_execute tool.
   * Valid markdown formatting required
   * Template variables supported
 
-## Template System
-- Built-in templates for standard files
-- Dynamic content generation
-- Template variable substitution:
-  * \${new Date().toISOString()} - Current timestamp
-  * Version tracking
-  * Customizable headers and metadata
-- Fallback templates if originals unavailable
-- Consistent structure enforcement
+## Configuration Guide
 
-## Usage Through BatchIt
+### Target Server (Required)
+- name: Server identifier
+- serverType: Must specify type, configuration, and provider
+  * filesystem:
+    - Requires absolute rootDirectory path
+    - Must specify provider: "batchit-internal" or "external"
+    - For "batchit-internal": No transport needed (handled automatically)
+    - For "external": Must provide transport configuration
+- transport: (Required only for external providers)
+  * stdio:
+    - Requires command and args
+    - Optional "npxDownload" flag for NPM package installation (+90s timeout)
+    - Environment variables via env object
+    - Automatic +30s timeout for process startup
+  * websocket:
+    - Requires valid ws:// or wss:// URL
+    - Configurable options object for connection parameters
 
+## Key Features
+
+1.  **Initialization**
+    -   Creates required memory bank structure.
+    -   Sets up required markdown files with templates.
+    -   Initializes with current timestamp.
+    -   Includes required files with purposes:
+        *   productContext.md: Project purpose and goals
+        *   activeContext.md: Current development focus
+        *   systemPatterns.md: Architecture patterns
+        *   techContext.md: Technical environment
+        *   progress.md: Project status tracking
+
+2.  **Verification and Reading**
+    -   Verifies files exist and structure is valid.
+    -   Creates missing files from templates.
+    -   Processes template variables.
+    -   Validates markdown structure.
+    -   Returns content of specified files.
+    -   Defaults to all required files.
+    -   Reports validation results.
+
+3.  **Updating**
+    -   Update modes with validation:
+        *   overwrite: Replace entire file content
+            *   Validates new content structure
+            *   Processes template variables
+            *   Updates timestamps
+            *   Preserves file metadata
+        *   append: Add content to end of file
+            *   Maintains document structure
+            *   Validates combined content
+            *   Updates timestamps
+        *   diff: Apply line-based changes
+            *   Line-level granularity
+            *   Preserves indentation
+            *   Validates resulting content
+        *   edit: Partial search/replace
+            *   Pattern-based replacement
+            *   Maintains document integrity
+            *   Reports changes via diff output
+
+4. **Listing**
+    - Shows memory bank structure
+    - Returns directory tree with metadata
+    - Includes file validation status
+    - Fails if directory doesn't exist
+
+## Examples
+
+### Initialize Operation
 \`\`\`json
 {
  "targetServer": {
@@ -1410,71 +1517,56 @@ This tool must be executed through BatchIt's batch_execute tool.
 }
 \`\`\`
 
-## Operations
-
-### initialize
-Creates required memory bank structure:
-- Creates directory if missing
-- Sets up required markdown files with templates
-- Initializes with current timestamp
-- Required files with purposes:
-  * productContext.md: Project purpose and goals
-  * activeContext.md: Current development focus
-  * systemPatterns.md: Architecture patterns
-  * techContext.md: Technical environment
-  * progress.md: Project status tracking
-
-### verify_and_read
-- Verifies files exist and structure is valid
-- Creates missing files from templates
-- Processes template variables
-- Validates markdown structure
-- Returns content of specified files
-- Defaults to all required files
-- Reports validation results
-
-### just_read
-- Reads existing files without modification
-- Validates markdown structure
-- Fails if files don't exist or invalid
-- No auto-creation of missing files
-- Reports validation errors
-
-### list
-- Shows memory bank structure
-- Returns directory tree with metadata
-- Includes file validation status
-- Fails if directory doesn't exist
-
-### update
-Update modes with validation:
-- overwrite: Replace entire file content
-  * Validates new content structure
-  * Processes template variables
-  * Updates timestamps
-  * Preserves file metadata
-- append: Add content to end of file
-  * Maintains document structure
-  * Validates combined content
-  * Updates timestamps
-- diff: Apply line-based changes
-  * Line-level granularity
-  * Preserves indentation
-  * Validates resulting content
-- edit: Partial search/replace
-  * Pattern-based replacement
-  * Maintains document integrity
-  * Reports changes via diff output
+### Verify and Read Operation
+\`\`\`json
+{
+ "targetServer": {
+   "name": "memory-bank",
+   "serverType": {
+     "type": "filesystem",
+     "config": {
+       "rootDirectory": "/absolute/path/to/memory/bank",
+       "provider": "batchit-internal"
+     }
+   }
+ },
+ "operations": [{
+   "tool": "memory_bank",
+   "arguments": {
+     "operation": "verify_and_read",
+     "directory": "/absolute/path/to/project-docs"
+   }
+ }]
+}
+\`\`\`
 
 ## Error Prevention and Validation
-- All paths must be absolute
-- Directory must be within rootDirectory
-- Files must follow markdown structure
-- Parent directory references (..) not allowed
-- File names must be valid markdown files
-- Template substitution validation
-- Content structure preservation
-- Automatic error recovery with fallbacks`,
+1.  **Path Validation**
+    -   All paths must be absolute.
+    -   Directory must be within rootDirectory.
+    -   Files must follow markdown structure.
+    -   Parent directory references (..) not allowed.
+    -   File names must be valid markdown files.
+
+2.  **Template and Content Validation**
+    -   Template substitution validation.
+    -   Content structure preservation.
+    -   Automatic error recovery with fallbacks.
+
+## Best Practices
+1.  **Directory Structure**
+    -   Organize memory bank files in a dedicated directory.
+    -   Use meaningful file names.
+
+2.  **Content Management**
+    -   Maintain a clear and consistent markdown structure.
+    -   Use template variables for dynamic content.
+    -   Regularly update documentation to reflect project changes.
+
+3.  **Operation Usage**
+    -   Use the "initialize" operation to set up a new memory bank.
+    -   Use the "verify_and_read" operation to ensure documentation integrity.
+    -   Use the "update" operation to modify documentation content.`,
   MemoryBankToolSchema.shape,
   async (args) => {
     const parsed = MemoryBankToolSchema.safeParse(args)
@@ -1483,22 +1575,25 @@ Update modes with validation:
     }
 
     try {
-      const controller = new MemoryBankController();
+      const controller = new MemoryBankController()
       const validationConfig = {
         rootDirectory: process.cwd(),
-        excludedDirs: ['/private/data', '/secret/hidden']
-      };
+        excludedDirs: ["/private/data", "/secret/hidden"],
+      }
 
-      const result = await controller.handleRequest(parsed.data, validationConfig);
+      const result = await controller.handleRequest(
+        parsed.data,
+        validationConfig
+      )
 
       return {
         content: [
           {
-            type: 'text',
-            text: JSON.stringify(result, null, 2)
-          }
-        ]
-      };
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      }
     } catch (error) {
       throw new McpError(
         ErrorCode.InternalError,
@@ -1507,13 +1602,6 @@ Update modes with validation:
     }
   }
 )
-
-// -----------------------------------------
-// Memory Bank Operation Implementation
-// -----------------------------------------
-
-// Memory Bank operations moved to src/mem-bank/
-
 
 // Startup
 ;(async function main() {

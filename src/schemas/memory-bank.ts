@@ -17,11 +17,12 @@ const BaseRequestParamsSchema = z
   .passthrough()
 
 export const MemoryBankUpdateSchema = z.object({
-  file: AbsolutePathSchema,
-  mode: z.enum(["overwrite", "append", "diff", "edit"]).default("overwrite"),
+  file: AbsolutePathSchema.describe("The absolute path to the file to be updated."),
+  mode: z.enum(["overwrite", "append", "diff", "edit"]).default("overwrite").describe("The update mode: overwrite, append, diff, or edit."),
   newContent: z
     .string()
     .optional()
+    .describe("The new content to write to the file (used in overwrite and append modes).")
     .refine(
       (content) => {
         if (!content) return true
@@ -37,30 +38,33 @@ export const MemoryBankUpdateSchema = z.object({
   diff: z
     .array(
       z.object({
-        line: z.number().positive(),
-        operation: z.enum(["insert", "replace", "delete"]),
-        text: z.string().optional(),
-        preserveIndent: z.boolean().default(true),
+        line: z.number().positive().describe("The line number to apply the diff to."),
+        operation: z.enum(["insert", "replace", "delete"]).describe("The diff operation: insert, replace, or delete."),
+        text: z.string().optional().describe("The text to insert or replace (used in insert and replace operations)."),
+        preserveIndent: z.boolean().default(true).describe("Whether to preserve the indentation of the line."),
       })
     )
-    .optional(),
+    .optional()
+    .describe("An array of diff operations to apply to the file (used in diff mode)."),
   edits: z
     .array(
       z.object({
-        oldText: z.string().min(1, "Search text cannot be empty"),
-        newText: z.string(),
-        matchCase: z.boolean().default(false),
-        wholeWord: z.boolean().default(false),
+        oldText: z.string().min(1, "Search text cannot be empty").describe("The text to search for and replace."),
+        newText: z.string().describe("The text to replace the old text with."),
+        matchCase: z.boolean().default(false).describe("Whether the search should be case-sensitive."),
+        wholeWord: z.boolean().default(false).describe("Whether the search should match whole words only."),
       })
     )
-    .optional(),
+    .optional()
+    .describe("An array of search and replace edits to apply to the file (used in edit mode)."),
   validation: z
     .object({
-      markdown: z.boolean().default(true),
-      requireHeader: z.boolean().default(true),
-      validateContent: z.boolean().default(true),
+      markdown: z.boolean().default(true).describe("Whether to validate the file content as Markdown."),
+      requireHeader: z.boolean().default(true).describe("Whether to require a header in the Markdown content."),
+      validateContent: z.boolean().default(true).describe("Whether to validate the content of the Markdown file."),
     })
-    .default({}),
+    .default({})
+    .describe("Validation options for the file content."),
 })
 
 export const MemoryBankToolSchema = BaseRequestParamsSchema.extend({
@@ -70,17 +74,18 @@ export const MemoryBankToolSchema = BaseRequestParamsSchema.extend({
     "just_read",
     "list",
     "update",
-  ]),
-  directory: AbsolutePathSchema,
-  files: z.array(AbsolutePathSchema).optional(),
-  updates: z.array(MemoryBankUpdateSchema).optional(),
+  ]).describe("The memory bank operation to perform."),
+  directory: AbsolutePathSchema.describe("The absolute path to the memory bank directory."),
+  files: z.array(AbsolutePathSchema).optional().describe("An array of absolute paths to specific files within the memory bank."),
+  updates: z.array(MemoryBankUpdateSchema).optional().describe("An array of updates to apply to files within the memory bank."),
   options: z
     .object({
-      backup: z.boolean().default(false),
-      rollback: z.boolean().default(false),
-      atomic: z.boolean().default(false),
+      backup: z.boolean().default(false).describe("Whether to create a backup of the file before updating it."),
+      rollback: z.boolean().default(false).describe("Whether to rollback the file to the backup if the update fails."),
+      atomic: z.boolean().default(false).describe("Whether to perform the update atomically."),
     })
-    .optional(),
+    .optional()
+    .describe("Options for the memory bank operation."),
 })
 
 // Re-export types that match the schema

@@ -1,12 +1,21 @@
 import { PathValidationConfig } from '../../batchit-filesystem/index.js';
 
+/**
+ * Configuration options for the memory bank.
+ */
 export interface MemoryBankConfig {
   rootDirectory?: string;
   templates?: Record<string, string>;
 }
 
+/**
+ * The possible memory bank operations.
+ */
 export type MemoryBankOperation = 'initialize' | 'verify_and_read' | 'just_read' | 'list' | 'update';
 
+/**
+ * Arguments for a memory bank operation.
+ */
 export interface MemoryBankArgs {
   operation: MemoryBankOperation;
   directory: string;
@@ -15,12 +24,18 @@ export interface MemoryBankArgs {
   options?: MemoryBankOptions;
 }
 
+/**
+ * Options for a memory bank operation.
+ */
 export interface MemoryBankOptions {
   backup?: boolean;
   rollback?: boolean;
   atomic?: boolean;
 }
 
+/**
+ * An update to apply to a memory bank file.
+ */
 export interface MemoryBankUpdate {
   file: string;
   mode: 'overwrite' | 'append' | 'diff' | 'edit';
@@ -29,17 +44,26 @@ export interface MemoryBankUpdate {
   edits?: Array<MemoryBankEdit>;
 }
 
+/**
+ * A diff operation to apply to a memory bank file.
+ */
 export interface MemoryBankDiffOperation {
   line: number;
   operation: 'insert' | 'replace' | 'delete';
   text?: string;
 }
 
+/**
+ * An edit to apply to a memory bank file.
+ */
 export interface MemoryBankEdit {
   oldText: string;
   newText: string;
 }
 
+/**
+ * The result of a memory bank operation.
+ */
 export interface MemoryBankResult {
   message: string;
   filesRead?: string[];
@@ -48,6 +72,9 @@ export interface MemoryBankResult {
   results?: string[];
 }
 
+/**
+ * Interface for the memory bank service.
+ */
 export interface MemoryBankService {
   initialize(directory: string, validation: PathValidationConfig): Promise<MemoryBankResult>;
   verifyAndRead(directory: string, files: string[] | undefined, validation: PathValidationConfig): Promise<MemoryBankResult>;

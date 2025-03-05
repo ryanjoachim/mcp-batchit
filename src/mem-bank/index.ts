@@ -2,13 +2,26 @@ import { MemoryBankService } from './services/memory-bank.service.js';
 import { MemoryBankConfig, MemoryBankArgs, MemoryBankResult } from './types/memory-bank.types.js';
 import { PathValidationConfig } from '../batchit-filesystem/index.js';
 
+/**
+ * Manages the memory bank operations, providing a structured way to interact with project documentation.
+ */
 export class MemoryBank {
   private service: MemoryBankService;
 
+  /**
+   * Constructs a new MemoryBank instance.
+   * @param config Optional configuration for the MemoryBank.
+   */
   constructor(config?: MemoryBankConfig) {
     this.service = new MemoryBankService(config);
   }
 
+  /**
+   * Executes a memory bank operation based on the provided arguments.
+   * @param args The arguments for the memory bank operation.
+   * @param validation The path validation configuration.
+   * @returns A promise that resolves to a MemoryBankResult.
+   */
   async execute(args: MemoryBankArgs, validation: PathValidationConfig): Promise<MemoryBankResult> {
     const { operation, directory, files, updates } = args;
 

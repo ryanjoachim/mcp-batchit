@@ -37,7 +37,7 @@ export async function readFileOp(
   filePath: string,
   config: PathValidationConfig,
   options: ReadOptions = defaultOptions
-): Promise<string> {
+): Promise<FileResult> {
   try {
     const validPath = await validatePathInProcess(filePath, config)
     const opts = { ...defaultOptions, ...options }
@@ -48,14 +48,31 @@ export async function readFileOp(
       throw new McpError(ErrorCode.InternalError, `File not found: ${validPath}`)
     }
 
+    const fileType = path.extname(validPath).toLowerCase()
+
     if (opts.fileTypeHandling) {
       const fileExtension = path.extname(validPath).toLowerCase()
 
+      let content: string;
       switch (fileExtension) {
         case '.pdf':
-          return await extractTextFromPDF(validPath)
+          content = await extractTextFromPDF(validPath)
+          return {
+            path: validPath,
+            content,
+            fileType: '.pdf',
+            lineCount: content.split('\n').length,
+            encoding: opts.encoding || 'utf-8'
+          }
         case '.docx':
-          return await extractTextFromDOCX(validPath)
+          content = await extractTextFromDOCX(validPath)
+          return {
+            path: validPath,
+            content,
+            fileType: '.docx',
+            lineCount: content.split('\n').length,
+            encoding: opts.encoding || 'utf-8'
+          }
         default:
           if (opts.checkBinary) {
             try {
@@ -84,7 +101,13 @@ export async function readFileOp(
       content = addLineNumbers(content, opts.startLineNumber)
     }
 
-    return content
+    return {
+      path: validPath,
+      content,
+      fileType,
+      lineCount: content.split('\n').length,
+      encoding: opts.encoding || 'utf-8'
+    }
 
   } catch (error) {
     if (error instanceof McpError) throw error
@@ -110,14 +133,7 @@ export async function readMultipleFilesOp(
       const batch = paths.slice(i, i + batchSize)
       const batchPromises = batch.map(async (filePath): Promise<FileResult> => {
         try {
-          const content = await readFileOp(filePath, config, opts)
-          return {
-            path: filePath,
-            content,
-            fileType: path.extname(filePath).toLowerCase(),
-            lineCount: content.split('\n').length,
-            encoding: opts.encoding || 'utf-8'
-          }
+          return await readFileOp(filePath, config, opts)
         } catch (error) {
           const mcpError = error instanceof McpError ?
             error :
