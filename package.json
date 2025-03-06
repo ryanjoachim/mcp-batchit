@@ -13,16 +13,8 @@
   ],
   "scripts": {
     "build": "tsc",
-    "prepare": "npm run build",
-    "watch": "tsc --watch",
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
-    "lint": "prettier src --ext .ts",
-    "clean": "rimraf build"
-  },
-  "config": {
-    "run-script": {
-      "build": "npm run build"
-    }
+    "test": "jest",
+    "lint": "prettier src --ext .ts"
   },
   "keywords": [
     "mcp",
@@ -67,6 +59,9 @@
   },
   "jest": {
     "preset": "ts-jest/presets/default-esm",
+    "testEnvironment": "node",
+    "roots": ["<rootDir>/src"],
+    "testRegex": "/__tests__/.*\\.test\\.ts$",
     "transformIgnorePatterns": [
       "node_modules/(?!(unified|remark-parse|remark-gfm|remark-lint|vfile|unist-util-.*|mdast-.*|micromark.*))"
     ],
@@ -79,16 +74,9 @@
         }
       ]
     },
-    "extensionsToTreatAsEsm": [
-      ".ts",
-      ".tsx"
-    ],
+    "extensionsToTreatAsEsm": [".ts"],
     "moduleNameMapper": {
-      "^(\\.{1,2}/.*)\\.js$": "$1",
-      "^unified$": "<rootDir>/node_modules/unified/index.js",
-      "^remark-parse$": "<rootDir>/node_modules/remark-parse/index.js",
-      "^remark-gfm$": "<rootDir>/node_modules/remark-gfm/index.js"
-    },
-    "testEnvironment": "node"
+      "^(\\.{1,2}/.*)\\.js$": "$1"
+    }
   }
 }

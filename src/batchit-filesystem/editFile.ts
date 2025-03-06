@@ -2,6 +2,13 @@ import fs from "fs/promises"
 import { createTwoFilesPatch } from "diff"
 import { validatePathInProcess, type PathValidationConfig } from "./validation.js"
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
+import { eventBus } from "../utils/eventBus.js"
+import { metricsCollector } from "../utils/metricsCollector.js"
+import { withRecovery } from "../utils/recovery.js"
+import { ConnectionManager } from "./connectionManager.js"
+
+// Initialize connection manager as singleton
+const connectionManager = new ConnectionManager()
 
 /**
  * Normalizes line endings from CRLF to LF.
@@ -51,6 +58,7 @@ function createUnifiedDiff(
 
 /**
  * Applies a series of line-based edits to a file, returning a diff.
+ * Uses connection pooling, metrics collection, and automatic retry with backoff.
  * If dryRun is true, no changes are written.
  * @throws McpError if line numbers are invalid or content cannot be matched
  */
@@ -60,16 +68,31 @@ export async function editFileOp(
   dryRun: boolean,
   config: PathValidationConfig
 ): Promise<string> {
-  const validPath = await validatePathInProcess(filePath, config)
-  let originalContent: string
-  try {
-    originalContent = normalizeLineEndings(await fs.readFile(validPath, "utf-8"))
-  } catch (error) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      `Failed to read file: ${error instanceof Error ? error.message : String(error)}`
-    )
-  }
+  const startTime = Date.now()
+  const operationId = `edit_${Date.now()}`
+
+  return withRecovery(async () => {
+    // Get or create connection
+    await connectionManager.getConnection(filePath)
+
+    eventBus.emit('editOperation:start', {
+      operationId,
+      filePath,
+      editsCount: edits.length
+    })
+    const validPath = await validatePathInProcess(filePath, config)
+    let originalContent: string
+    try {
+      originalContent = normalizeLineEndings(await fs.readFile(validPath, "utf-8"))
+    } catch (error) {
+      await connectionManager.recordError(filePath, error instanceof Error ? error : new Error(String(error)))
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `Failed to read file: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+
+    metricsCollector.recordMetric(`edit.file.size`, originalContent.length)
 
   const totalLines = originalContent.split("\n").length
   let modifiedContent = originalContent
@@ -161,16 +184,29 @@ export async function editFileOp(
   // Add the diff
   result += `${"`".repeat(numBackticks)}diff\n${diff}${"`".repeat(numBackticks)}\n\n`
 
-  if (!dryRun) {
-    try {
-      await fs.writeFile(validPath, modifiedContent, "utf-8")
-    } catch (error) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        `Failed to write file: ${error instanceof Error ? error.message : String(error)}`
-      )
+    if (!dryRun) {
+      try {
+        await fs.writeFile(validPath, modifiedContent, "utf-8")
+      } catch (error) {
+        await connectionManager.recordError(filePath, error instanceof Error ? error : new Error(String(error)))
+        throw new McpError(
+          ErrorCode.InternalError,
+          `Failed to write file: ${error instanceof Error ? error.message : String(error)}`
+        )
+      }
     }
-  }
 
-  return result
+    const duration = Date.now() - startTime
+    metricsCollector.recordMetric(`edit.operation.duration`, duration)
+
+    eventBus.emit('editOperation:complete', {
+      operationId,
+      filePath,
+      duration,
+      editsApplied: edits.length,
+      dryRun
+    })
+
+    return result
+  })
 }

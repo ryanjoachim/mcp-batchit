@@ -11,7 +11,7 @@ dist/
 *.d.ts.map
 
 # IDEs and editors
-.history/
+.history
 .idea/
 .vscode/
 *.swp
