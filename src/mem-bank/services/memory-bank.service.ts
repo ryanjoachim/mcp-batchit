@@ -1,6 +1,6 @@
 
 import { validatePath, type PathValidationOptions } from "../../utils/pathUtils.js"
-import type { PathValidationConfig } from "../../types/config.js"
+import type { PathValidationConfig } from "../../batchit-filesystem/validation.js"
 import type { MemoryBankConfig, MemoryBankResult, MemoryBankUpdate } from "../types/memory-bank.types.js"
 import { readFileOp, writeFileOp, createDirectoryOp, listDirectoryOp, directoryTreeOp, editFileOp } from "../../batchit-filesystem/index.js"
 import * as path from "path"

@@ -6,46 +6,14 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { WebSocketClientTransport } from "@modelcontextprotocol/sdk/client/websocket.js"
 import { z } from "zod"
-import {
-  McpError,
-  ErrorCode,
-  CallToolResultSchema,
-  EmptyResultSchema,
-} from "@modelcontextprotocol/sdk/types.js"
+import { batchExecutor } from "./executor/index.js"
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
 import { ChildProcess } from "child_process"
-//import * as fs from "fs/promises"
-// import * as path from "path"
 import { existsSync } from "fs"
 import { isAbsolute } from "path"
-
-// Import the existing batchit filesystem code:
-import {
-  readFileOp,
-  readMultipleFilesOp,
-  writeFileOp,
-  editFileOp,
-  createDirectoryOp,
-  listDirectoryOp,
-  directoryTreeOp,
-  moveFileOp,
-  searchFilesOp,
-  getFileInfoOp,
-  ReadFileArgsSchema,
-  ReadMultipleFilesArgsSchema,
-  WriteFileArgsSchema,
-  EditFileArgsSchema,
-  CreateDirectoryArgsSchema,
-  ListDirectoryArgsSchema,
-  DirectoryTreeArgsSchema,
-  MoveFileArgsSchema,
-  SearchFilesArgsSchema,
-  GetFileInfoArgsSchema,
-  PathValidationConfig,
-} from "./batchit-filesystem/index.js"
-
-// Import the memory bank schema and implementation
 import { MemoryBankToolSchema } from "./schemas/memory-bank.js"
-import { MemoryBank } from "./mem-bank/index.js"
+import { MemoryBankController } from "./mem-bank/controllers/memory-bank.controller.js"
+import type { BatchResult } from "./types/config.js"
 
 // Self-reference blocklist:
 const SELF_REFERENCE_PATTERNS = [
@@ -166,15 +134,6 @@ export interface HPCErrorResponse {
   content?: HPCContentItem[]
 }
 
-function isHPCErrorResponse(value: unknown): value is HPCErrorResponse {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    "isError" in value &&
-    (value as HPCErrorResponse).isError === true
-  )
-}
-
 function isStdioTransport(transport: any): transport is StdioClientTransport {
   return "start" in transport
 }
@@ -241,23 +200,6 @@ const TransportConfigSchema = z.discriminatedUnion("type", [
     options: z.record(z.unknown()).optional(),
   }),
 ])
-
-export interface Operation {
-  tool: string
-  arguments: Record<string, unknown>
-  id?: string
-  dependsOn?: string | string[]
-  transform?: unknown
-}
-
-export interface OperationResult {
-  tool: string
-  success: boolean
-  result?: unknown
-  error?: string
-  durationMs: number
-  operationId?: string
-}
 
 const BatchArgsSchema = z.object({
   targetServer: z
@@ -568,558 +510,10 @@ class ConnectionManager {
   }
 }
 
-// -----------------------------
-// Batch Executor
-// -----------------------------
-class BatchExecutor {
-  /**
-   * The aggregator's local excluded directories.
-   * If you want the user to read/write anywhere, keep it empty or minimal.
-   */
-  private localExcludedDirs: string[] = ["/private/data", "/secret/hidden"]
-  private currentServerIdentity?: ServerIdentity
-
-  constructor(private connectionManager: ConnectionManager) {}
-
-  private setCurrentServerIdentity(identity: ServerIdentity) {
-    this.currentServerIdentity = identity
-  }
-
-  private getPathValidationConfig(): PathValidationConfig {
-    if (!this.currentServerIdentity) {
-      throw new Error("Server identity not set")
-    }
-
-    if (this.currentServerIdentity.serverType.type !== "filesystem") {
-      throw new Error("Server must be of type 'filesystem'")
-    }
-
-    const { rootDirectory } = this.currentServerIdentity.serverType.config
-    if (!rootDirectory) {
-      throw new Error(
-        "rootDirectory is required in filesystem server configuration"
-      )
-    }
-
-    return {
-      rootDirectory,
-      excludedDirs: this.localExcludedDirs,
-    }
-  }
-
-  private async executeOperation(
-    connection: ServerConnection,
-    operation: { tool: string; arguments: Record<string, unknown> },
-    timeoutMs: number,
-    operationId?: string
-  ): Promise<OperationResult> {
-    // If target is filesystem, do local calls:
-    if (connection.identity.serverType.type === "filesystem") {
-      return this.localFilesystemCall(
-        operation.tool,
-        operation.arguments,
-        operationId
-      )
-    }
-
-    // Otherwise, do HPC calls:
-    const maxRetries = 1
-    let attempt = 0
-    const overallStart = Date.now()
-
-    while (attempt <= maxRetries) {
-      try {
-        await this.waitForServerReady(connection, timeoutMs)
-        const result = await Promise.race([
-          connection.client.callTool(
-            { name: operation.tool, arguments: operation.arguments },
-            CallToolResultSchema,
-            {}
-          ),
-          new Promise<never>((_, reject) =>
-            setTimeout(
-              () =>
-                reject(
-                  new McpError(ErrorCode.RequestTimeout, "Operation timed out")
-                ),
-              timeoutMs
-            )
-          ),
-        ])
-        if (isHPCErrorResponse(result)) {
-          return {
-            tool: operation.tool,
-            success: false,
-            error: this.getErrorMessage(result),
-            durationMs: Date.now() - overallStart,
-            operationId,
-          }
-        }
-        return {
-          tool: operation.tool,
-          success: true,
-          result,
-          durationMs: Date.now() - overallStart,
-          operationId,
-        }
-      } catch (error) {
-        attempt++
-        if (attempt > maxRetries) {
-          return {
-            tool: operation.tool,
-            success: false,
-            error:
-              error instanceof Error
-                ? `${error.name}: ${error.message}`
-                : String(error),
-            durationMs: Date.now() - overallStart,
-            operationId,
-          }
-        }
-        await new Promise((resolve) => setTimeout(resolve, 500))
-      }
-    }
-    return {
-      tool: operation.tool,
-      success: false,
-      error: "Unknown error",
-      durationMs: Date.now() - overallStart,
-      operationId,
-    }
-  }
-
-  /**
-   * localFilesystemCall: The main local logic for all filesystem-based tools,
-   * including memory_bank.
-   */
-  private async localFilesystemCall(
-    tool: string,
-    rawArgs: Record<string, unknown>,
-    operationId?: string
-  ): Promise<OperationResult> {
-    const overallStart = Date.now()
-    let result: unknown
-
-    // Get validation config based on current server identity
-    const validationConfig = this.getPathValidationConfig()
-
-    try {
-      switch (tool) {
-        // Basic filesystem calls:
-        case "read_file": {
-          const parsed = ReadFileArgsSchema.safeParse(rawArgs)
-          if (!parsed.success) {
-            throw new Error(`Invalid arguments for read_file: ${parsed.error}`)
-          }
-          result = await readFileOp(
-            parsed.data.path,
-            validationConfig,
-            parsed.data.options || undefined
-          )
-          break
-        }
-        case "read_multiple_files": {
-          const parsed = ReadMultipleFilesArgsSchema.safeParse(rawArgs)
-          if (!parsed.success) {
-            throw new Error(`Invalid arguments: ${parsed.error}`)
-          }
-          result = await readMultipleFilesOp(
-            parsed.data.paths,
-            validationConfig,
-            parsed.data.options || undefined
-          )
-          break
-        }
-        case "write_file": {
-          const parsed = WriteFileArgsSchema.safeParse(rawArgs)
-          if (!parsed.success) {
-            throw new Error(`Invalid arguments for write_file: ${parsed.error}`)
-          }
-          await writeFileOp(
-            parsed.data.path,
-            parsed.data.content,
-            validationConfig
-          )
-          result = `Successfully wrote to ${parsed.data.path}`
-          break
-        }
-        case "edit_file": {
-          const parsed = EditFileArgsSchema.safeParse(rawArgs)
-          if (!parsed.success) {
-            throw new Error(`Invalid arguments for edit_file: ${parsed.error}`)
-          }
-          result = await editFileOp(
-            parsed.data.path,
-            parsed.data.edits,
-            parsed.data.dryRun,
-            validationConfig
-          )
-          break
-        }
-        case "create_directory": {
-          const parsed = CreateDirectoryArgsSchema.safeParse(rawArgs)
-          if (!parsed.success) {
-            throw new Error(`Invalid arguments: ${parsed.error}`)
-          }
-          await createDirectoryOp(parsed.data.paths, validationConfig)
-          result = `Successfully created directory ${parsed.data.paths}`
-          break
-        }
-        case "list_directory": {
-          const parsed = ListDirectoryArgsSchema.safeParse(rawArgs)
-          if (!parsed.success) {
-            throw new Error(`Invalid arguments: ${parsed.error}`)
-          }
-          result = await listDirectoryOp(parsed.data.path, validationConfig)
-          break
-        }
-        case "directory_tree": {
-          const parsed = DirectoryTreeArgsSchema.safeParse(rawArgs)
-          if (!parsed.success) {
-            throw new Error(`Invalid arguments: ${parsed.error}`)
-          }
-          result = await directoryTreeOp(parsed.data.path, validationConfig)
-          break
-        }
-        case "move_file": {
-          const parsed = MoveFileArgsSchema.safeParse(rawArgs)
-          if (!parsed.success) {
-            throw new Error(`Invalid arguments: ${parsed.error}`)
-          }
-          await moveFileOp(
-            parsed.data.source,
-            parsed.data.destination,
-            validationConfig
-          )
-          result = `Successfully moved ${parsed.data.source} to ${parsed.data.destination}`
-          break
-        }
-        case "search_files": {
-          const parsed = SearchFilesArgsSchema.safeParse(rawArgs)
-          if (!parsed.success) {
-            throw new Error(`Invalid arguments: ${parsed.error}`)
-          }
-          const found = await searchFilesOp(
-            parsed.data.path,
-            {
-              pattern: parsed.data.pattern,
-              excludePatterns: parsed.data.excludePatterns,
-              useGlob: parsed.data.useGlob,
-              useRegex: parsed.data.useRegex,
-              caseSensitive: parsed.data.caseSensitive,
-              wholeWord: parsed.data.wholeWord,
-              maxConcurrent: parsed.data.maxConcurrent,
-            },
-            validationConfig
-          )
-          result = found.length ? found : "No matches found"
-          break
-        }
-        case "get_file_info": {
-          const parsed = GetFileInfoArgsSchema.safeParse(rawArgs)
-          if (!parsed.success) {
-            throw new Error(
-              `Invalid arguments for get_file_info: ${parsed.error}`
-            )
-          }
-          result = await getFileInfoOp(parsed.data.path, validationConfig)
-          break
-        }
-
-        // ------------------------------------------
-        // The user-facing memory_bank tool definition
-        // ------------------------------------------
-        case "memory_bank": {
-          // parse arguments via MemoryBankToolSchema
-          const parsed = MemoryBankToolSchema.safeParse(rawArgs)
-          if (!parsed.success) {
-            throw new Error(parsed.error.message)
-          }
-          // Use the new MemoryBank implementation
-          const bank = new MemoryBank()
-          result = await bank.execute(parsed.data, validationConfig)
-          break
-        }
-
-        default:
-          throw new Error(`Unknown local filesystem tool: ${tool}`)
-      }
-
-      return {
-        tool,
-        success: true,
-        result,
-        durationMs: Date.now() - overallStart,
-        operationId,
-      }
-    } catch (err) {
-      return {
-        tool,
-        success: false,
-        error: err instanceof Error ? err.message : String(err),
-        durationMs: Date.now() - overallStart,
-        operationId,
-      }
-    }
-  }
-
-  private calculateTimeout(
-    baseTimeout: number,
-    transport: TransportConfig | undefined
-  ): number {
-    if (!transport) {
-      return baseTimeout
-    }
-
-    if (
-      transport.type === "stdio" &&
-      ((transport.command === "cmd.exe" &&
-        transport.args?.some((arg) => arg.includes("npx"))) ||
-        transport.npxDownload)
-    ) {
-      return baseTimeout + 90000
-    }
-    if (transport.type === "stdio") {
-      return baseTimeout + 30000
-    }
-    return baseTimeout
-  }
-
-  private async waitForServerReady(
-    connection: ServerConnection,
-    totalTimeout: number
-  ) {
-    const startTime = Date.now()
-    const maxAttempts = 100
-    let attempts = 0
-    while (attempts < maxAttempts) {
-      try {
-        await connection.client.request(
-          {
-            method: "health",
-            params: { _meta: { progressToken: `ready-${Date.now()}` } },
-          },
-          EmptyResultSchema,
-          {}
-        )
-        return
-      } catch (error) {
-        if (Date.now() - startTime > totalTimeout) {
-          throw new McpError(
-            ErrorCode.RequestTimeout,
-            "Server not ready in time"
-          )
-        }
-        await new Promise((resolve) => setTimeout(resolve, 500))
-        attempts++
-      }
-    }
-    throw new McpError(
-      ErrorCode.RequestTimeout,
-      "Max attempts reached for readiness check"
-    )
-  }
-
-  private getErrorMessage(result: HPCErrorResponse): string {
-    const directError = result.error || result.message
-    if (directError) return directError
-    if (result.content?.length) {
-      const textContent = result.content
-        .filter((item) => item.type === "text" && typeof item.text === "string")
-        .map((item) => item.text)
-        .join(" ")
-      if (textContent) return textContent
-    }
-    return "Unknown HPC error"
-  }
-
-  private areAllLocalOperations(operations: Operation[]): boolean {
-    const localTools = [
-      "read_file",
-      "read_multiple_files",
-      "write_file",
-      "edit_file",
-      "create_directory",
-      "list_directory",
-      "directory_tree",
-      "move_file",
-      "search_files",
-      "get_file_info",
-      "memory_bank",
-    ]
-    return operations.every((op) => localTools.includes(op.tool))
-  }
-
-  async executeBatch(
-    identity: ServerIdentity,
-    operations: Operation[],
-    options: {
-      maxConcurrent: number
-      timeoutMs: number
-      stopOnError: boolean
-      keepAlive?: boolean
-    }
-  ): Promise<OperationResult[]> {
-    // If this is a filesystem server and all operations are local, handle directly
-    if (
-      identity.serverType.type === "filesystem" &&
-      this.areAllLocalOperations(operations)
-    ) {
-      // Set current server identity for path validation
-      this.setCurrentServerIdentity(identity)
-      const results: OperationResult[] = []
-      const resultMap = new Map<string, OperationResult>()
-
-      for (const op of operations) {
-        try {
-          if (op.dependsOn) {
-            const deps = Array.isArray(op.dependsOn)
-              ? op.dependsOn
-              : [op.dependsOn]
-            const depResults = deps.map((d) => resultMap.get(d)?.result)
-
-            if (op.transform) {
-              if (typeof op.transform === "string") {
-                try {
-                  const transformFn = eval("(" + op.transform + ")")
-                  if (typeof transformFn === "function") {
-                    op.arguments = transformFn(depResults, op.arguments)
-                  }
-                } catch (ex) {
-                  console.error(`Transform function failed for ${op.id}`, ex)
-                }
-              } else if (typeof op.transform === "object") {
-                op.arguments = { ...op.arguments, ...op.transform }
-              }
-            }
-          }
-
-          const result = await this.localFilesystemCall(
-            op.tool,
-            op.arguments,
-            op.id
-          )
-
-          if (op.id) {
-            resultMap.set(op.id, result)
-          }
-
-          results.push(result)
-
-          if (!result.success && options.stopOnError) {
-            break
-          }
-        } catch (error) {
-          const errorResult: OperationResult = {
-            tool: op.tool,
-            success: false,
-            error: error instanceof Error ? error.message : String(error),
-            durationMs: 0,
-            operationId: op.id,
-          }
-          results.push(errorResult)
-
-          if (options.stopOnError) {
-            break
-          }
-        }
-      }
-
-      return results
-    }
-
-    // Otherwise, proceed with remote execution:
-    const connection =
-      await this.connectionManager.getOrCreateConnection(identity)
-    const adjustedTimeout = this.calculateTimeout(
-      options.timeoutMs,
-      identity.transport
-    )
-
-    let pendingOps = operations.slice()
-    const resultMap = new Map<string, OperationResult>()
-    const results: OperationResult[] = []
-    const running = new Set<Promise<void>>()
-
-    while (pendingOps.length > 0 || running.size > 0) {
-      const readyOps = pendingOps.filter((op) => {
-        if (!op.dependsOn) return true
-        const deps = Array.isArray(op.dependsOn) ? op.dependsOn : [op.dependsOn]
-        return deps.every((dep) => resultMap.has(dep))
-      })
-
-      if (readyOps.length === 0 && running.size === 0) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          "Unresolved or cyclic dependencies in operations"
-        )
-      }
-
-      for (
-        let i = 0;
-        i < readyOps.length && running.size < options.maxConcurrent;
-        i++
-      ) {
-        const op = readyOps[i]
-        pendingOps.splice(pendingOps.indexOf(op), 1)
-
-        let finalArguments = op.arguments
-        if (op.dependsOn) {
-          const deps = Array.isArray(op.dependsOn)
-            ? op.dependsOn
-            : [op.dependsOn]
-          const depResults = deps.map((d) => resultMap.get(d)?.result)
-          if (op.transform) {
-            if (typeof op.transform === "string") {
-              try {
-                const transformFn = eval("(" + op.transform + ")")
-                if (typeof transformFn === "function") {
-                  finalArguments = transformFn(depResults, op.arguments)
-                }
-              } catch (ex) {
-                console.error(`Transform function failed for ${op.id}`, ex)
-              }
-            } else if (typeof op.transform === "object") {
-              finalArguments = { ...op.arguments, ...op.transform }
-            }
-          }
-        }
-
-        const opPromise = (async () => {
-          const res = await this.executeOperation(
-            connection,
-            { tool: op.tool, arguments: finalArguments },
-            adjustedTimeout,
-            op.id
-          )
-          if (op.id) resultMap.set(op.id, res)
-          results.push(res)
-          if (!res.success && options.stopOnError) {
-            pendingOps = []
-          }
-        })()
-
-        running.add(opPromise)
-        opPromise.then(() => running.delete(opPromise))
-      }
-
-      if (running.size > 0) {
-        await Promise.race(running)
-      }
-    }
-
-    if (!options.keepAlive) {
-      await this.connectionManager.closeConnection(
-        this.connectionManager.createKeyForIdentity(identity)
-      )
-    }
-    return results
-  }
-}
-
+// Create the connection manager singleton
 export const connectionManager = new ConnectionManager()
-export const batchExecutor = new BatchExecutor(connectionManager)
 
+// Create and configure the MCP server
 export const server = new McpServer({
   name: "mcp-batchit",
   version: "1.1.1",
@@ -1364,7 +758,7 @@ Array of operations to execute:
       throw new McpError(ErrorCode.InvalidParams, parsed.error.message)
     }
     const { targetServer, operations, options } = parsed.data
-    const results = await batchExecutor.executeBatch(
+    const result: BatchResult = await batchExecutor.executeBatch(
       targetServer,
       operations,
       options
@@ -1378,14 +772,19 @@ Array of operations to execute:
             {
               targetServer: targetServer.name,
               summary: {
-                successCount: results.filter((r) => r.success).length,
-                failCount: results.filter((r) => !r.success).length,
-                totalDurationMs: results.reduce(
-                  (acc, r) => acc + r.durationMs,
-                  0
-                ),
+                successCount: result.operations.filter((r) => r.success).length,
+                failCount: result.operations.filter((r) => !r.success).length,
+                totalDurationMs: result.operations.reduce((acc, r) => {
+                  const duration =
+                    typeof r.result === "object" &&
+                    r.result &&
+                    "durationMs" in r.result
+                      ? (r.result as { durationMs: number }).durationMs
+                      : 0
+                  return acc + duration
+                }, 0),
               },
-              operations: results,
+              operations: result.operations,
             },
             null,
             2
@@ -1399,7 +798,7 @@ Array of operations to execute:
 // --------------
 // Memory Bank Integration
 // --------------
-import { MemoryBankController } from "./mem-bank/controllers/memory-bank.controller.js"
+
 server.tool(
   "memory_bank",
   `# Memory Bank Tool
