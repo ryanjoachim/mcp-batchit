@@ -31,7 +31,7 @@ yarn-error.log*
 .env
 .env.*
 repomix.config.json
-#repomix-output.txt
+repomix-output.txt
 .clinerules
 .clinerules-architect
 .clinerules-ask
