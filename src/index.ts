@@ -272,7 +272,7 @@ class ConnectionManager {
       // Create a provider-based connection instead of transport-based
       const connection: ServerConnection = {
         client: new Client(
-          { name: "mcp-batchit", version: "1.0.1" },
+          { name: "mcp-batchit", version: "1.0.2" },
           { capabilities: {} }
         ),
         transport: {} as any, // Placeholder until full provider implementation
@@ -300,7 +300,7 @@ class ConnectionManager {
     );
 
     const client = new Client(
-      { name: "mcp-batchit", version: "1.0.1" },
+      { name: "mcp-batchit", version: "1.0.2" },
       { capabilities: {} }
     );
 
@@ -599,7 +599,7 @@ const connectionManager = new ConnectionManager()
 const batchExecutor = new BatchExecutor(connectionManager)
 const server = new McpServer({
   name: "mcp-batchit",
-  version: "1.0.0",
+  version: "1.0.2",
 })
 
 // Define the tool's schema shape (required properties for tool registration)
