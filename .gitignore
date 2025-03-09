@@ -11,12 +11,13 @@ dist/
 *.d.ts.map
 
 # IDEs and editors
+.history
 .idea/
 .vscode/
 *.swp
 *.swo
 .DS_Store
-docs/
+.docs/
 memory-bank/
 
 # Logs
@@ -29,3 +30,13 @@ yarn-error.log*
 # Environment variables
 .env
 .env.*
+repomix.config.json
+repomix-output.txt
+.clinerules
+.clinerules-architect
+.clinerules-ask
+.clinerules-code
+.clinerules-test
+.clinerules-debug
+.roomodes
+.roo
