@@ -1,204 +1,42 @@
 #!/usr/bin/env node
 
+// MCP SDK imports
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { WebSocketClientTransport } from "@modelcontextprotocol/sdk/client/websocket.js"
-import { z } from "zod"
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
+import { WebSocketClientTransport } from "@modelcontextprotocol/sdk/client/websocket.js"
+
+// Internal imports - utils
+import { validateTransport, getTransportConfig } from "./utils/transportValidation.js"
 import { withRecovery } from "./utils/recovery.js"
 import { formatBatchResults, formatErrorResponse } from "./utils/responseFormat.js"
-import { ChildProcess } from "child_process"
-import { Provider, createProvider } from "./providers/factory.js"
 
-// Array of patterns that indicate self-referential usage
-const SELF_REFERENCE_PATTERNS = [
-  // Direct file path references
-  "mcp-batchit/build/index.js",
-  "mcp-batchit/dist/index.js",
-  "mcp-batchit/lib/index.js",
+// Internal imports - providers
+import { createProvider } from "./providers/factory.js"
+// Internal imports - types
+import {
+  BatchArgsSchema,
+  BatchExecuteToolSchema,
+  ServerIdentity,
+  TransportConfig,
+  Operation,
+  OperationResult,
+  isHPCErrorResponse,
+  HPCErrorResponse
+} from "./types/schemas/index.js"
 
-  // NPM package references
-  "@modelcontextprotocol/batchit",
-  "@modelcontextprotocol/server-batchit",
 
-  // Common variations
-  "mcp-batchit",
-  "batchit",
-  "server-batchit",
-];
-
-// Server Type Definitions
-interface FilesystemServerConfig {
-  rootDirectory?: string;
-  permissions?: string;
-  watchMode?: boolean;
-  provider?: "batchit-internal" | "external";
-}
-
-interface DatabaseServerConfig {
-  database: string;
-  readOnly?: boolean;
-  poolSize?: number;
-}
-
-interface GenericServerConfig {
-  [key: string]: unknown;
-}
-
-type ServerType =
-  | { type: "filesystem"; config: FilesystemServerConfig }
-  | { type: "database"; config: DatabaseServerConfig }
-  | { type: "generic"; config: GenericServerConfig }
-
-// Transport Configuration
-type TransportConfig =
-  | {
-      type: "stdio"
-      command: string
-      args?: string[]
-      env?: Record<string, string>
-    }
-  | {
-      type: "websocket"
-      url: string
-      options?: Record<string, unknown>
-    }
-
-interface ServerIdentity {
-  name: string
-  serverType: ServerType
-  transport: TransportConfig
-  maxIdleTimeMs?: number
-}
-
-interface ServerConnection {
-  client: Client
-  transport: WebSocketClientTransport | StdioClientTransport
-  childProcess?: ChildProcess
-  lastUsed: number
-  identity: ServerIdentity
-  provider?: Provider
-}
-
-function getTransportConfig(identity: ServerIdentity): TransportConfig | undefined {
-  // For filesystem servers, handle provider selection
-  if (identity.serverType.type === "filesystem") {
-    const { provider = "external" } = identity.serverType.config;
-
-    // Internal provider doesn't need external transport
-    if (provider === "batchit-internal") {
-      return undefined;
-    }
-
-    // External provider requires transport configuration
-    if (provider === "external" && !identity.transport) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        "External providers require transport configuration"
-      );
-    }
-  }
-
-  return identity.transport;
-}
-
-interface HPCContentItem {
-  type: string
-  text?: string
-}
-
-interface HPCErrorResponse {
-  isError: true
-  error?: string
-  message?: string
-  content?: HPCContentItem[]
-}
-
-function isHPCErrorResponse(value: unknown): value is HPCErrorResponse {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    "isError" in value &&
-    value.isError === true
-  )
-}
-
-// Type guard for StdioClientTransport
-function isStdioTransport(transport: any): transport is StdioClientTransport {
-  return "start" in transport
-}
-
-// Schema Definitions
-const ServerTypeSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("filesystem").describe("Filesystem server type"),
-    config: z.object({
-      rootDirectory: z.string().optional().describe("Base directory for all filesystem operations"),
-      permissions: z.string().optional().describe("Permissions for filesystem access"),
-      watchMode: z.boolean().optional().describe("Enable watch mode for file changes"),
-      provider: z.enum(["batchit-internal", "external"]).default("external").describe("Provider type - internal or external filesystem"),
-    }),
-  }),
-  z.object({
-    type: z.literal("database").describe("Database server type"),
-    config: z.object({
-      database: z.string().describe("Database connection string"),
-      readOnly: z.boolean().optional().describe("Read-only mode"),
-      poolSize: z.number().optional().describe("Connection pool size"),
-    }),
-  }),
-  z.object({
-    type: z.literal("generic").describe("Generic server type"),
-    config: z.record(z.unknown()).describe("Generic server configuration"),
-  }),
-])
-
-const TransportConfigSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("stdio"),
-    command: z.string(),
-    args: z.array(z.string()).optional(),
-    env: z.record(z.string()).optional(),
-  }),
-  z.object({
-    type: z.literal("websocket"),
-    url: z.string(),
-    options: z.record(z.unknown()).optional(),
-  }),
-])
-
-const BatchArgsSchema = z.object({
-  targetServer: z.object({
-    name: z.string().describe("Server identifier"),
-    serverType: ServerTypeSchema,
-    transport: TransportConfigSchema.describe("Transport configuration (required for external providers)"),
-    maxIdleTimeMs: z.number().optional().describe("Maximum idle time before connection close (ms)"),
-  }).describe("Target server configuration"),
-  operations: z.array(
-    z.object({
-      tool: z.string().describe("Name of the tool to execute"),
-      arguments: z.record(z.unknown()).default({}).describe("Tool-specific arguments"),
-      id: z.string().optional().describe("Unique identifier for referencing operation results"),
-      dependsOn: z.union([z.string(), z.array(z.string())]).optional().describe("IDs of operations this one depends on"),
-    })
-  ).describe("Array of operations to execute"),
-  options: z
-    .object({
-      maxConcurrent: z.number().default(10).describe("Maximum number of concurrent operations"),
-      timeoutMs: z.number().default(30000).describe("Operation timeout in milliseconds"),
-      stopOnError: z.boolean().default(false).describe("Stop on first error"),
-      keepAlive: z.boolean().default(false).describe("Keep connection alive after batch completion"),
-    })
-    .default({
-      maxConcurrent: 10,
-      timeoutMs: 30000,
-      stopOnError: false,
-      keepAlive: false,
-    })
-    .describe("Batch execution options"),
-})
+// Internal imports - connections
+import {
+  ServerConnection,
+  createTransportConnection,
+  createProviderConnection,
+  isTransportConnection,
+  isProviderConnection
+} from "./types/connections.js"
+import { resultsCache } from "./utils/resultsCache.js"
 
 // Connection Management
 class ConnectionManager {
@@ -211,42 +49,6 @@ class ConnectionManager {
       serverType: identity.serverType,
       transport: identity.transport,
     })
-  }
-
-  private validateTransport(transport: TransportConfig): void {
-    if (transport.type === "stdio") {
-      if (!transport.command) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          "Command is required for stdio transport"
-        );
-      }
-
-      const fullCommand = [transport.command, ...(transport.args || [])].join(" ");
-      if (SELF_REFERENCE_PATTERNS.some(pattern =>
-        fullCommand.toLowerCase().includes(pattern.toLowerCase())
-      )) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          "Cannot spawn the BatchIt aggregator itself"
-        );
-      }
-    } else if (transport.type === "websocket") {
-      try {
-        const url = new URL(transport.url);
-        if (url.protocol !== "ws:" && url.protocol !== "wss:") {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            "WebSocket URL must use ws:// or wss:// protocol"
-          );
-        }
-      } catch (error) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          "Invalid WebSocket URL"
-        );
-      }
-    }
   }
 
   async getOrCreateConnection(
@@ -269,18 +71,7 @@ class ConnectionManager {
         identity.serverType.config.rootDirectory || process.cwd()
       );
 
-      // Create a provider-based connection instead of transport-based
-      const connection: ServerConnection = {
-        client: new Client(
-          { name: "mcp-batchit", version: "1.0.2" },
-          { capabilities: {} }
-        ),
-        transport: {} as any, // Placeholder until full provider implementation
-        provider,
-        lastUsed: Date.now(),
-        identity
-      };
-
+      const connection = createProviderConnection(provider, identity);
       this.connections.set(serverKey, connection);
       return connection;
     }
@@ -300,7 +91,7 @@ class ConnectionManager {
     );
 
     const client = new Client(
-      { name: "mcp-batchit", version: "1.0.2" },
+      { name: "mcp-batchit", version: "1.1.0" },
       { capabilities: {} }
     );
 
@@ -309,13 +100,7 @@ class ConnectionManager {
       () => client.connect(transport)
     );
 
-    const connection: ServerConnection = {
-      client,
-      transport,
-      lastUsed: Date.now(),
-      identity,
-    };
-
+    const connection = createTransportConnection(client, transport, identity);
     this.connections.set(serverKey, connection);
     this.setupMonitoring(serverKey, connection);
     this.setupCleanupInterval(serverKey);
@@ -329,7 +114,7 @@ class ConnectionManager {
     switch (config.type) {
       case "stdio": {
         try {
-          this.validateTransport(config);
+          validateTransport(config);
 
           const transport = new StdioClientTransport({
             command: config.command,
@@ -352,7 +137,7 @@ class ConnectionManager {
 
       case "websocket": {
         try {
-          this.validateTransport(config);
+          validateTransport(config);
 
           const wsUrl =
             config.url.startsWith("ws://") || config.url.startsWith("wss://")
@@ -378,20 +163,22 @@ class ConnectionManager {
     serverKey: string,
     connection: ServerConnection
   ): void {
-    if (isStdioTransport(connection.transport)) {
-      // For stdio transports, we can monitor stderr
-      const stderr = connection.transport.stderr
-      if (stderr) {
-        stderr.on("data", (data: Buffer) => {
-          console.error(`[${connection.identity.name}] ${data.toString()}`)
-        })
+    if (isTransportConnection(connection)) {
+      if (connection.transport instanceof StdioClientTransport) {
+        // For stdio transports, we can monitor stderr
+        const stderr = connection.transport.stderr;
+        if (stderr) {
+          stderr.on("data", (data: Buffer) => {
+            console.error(`[${connection.identity.name}] ${data.toString()}`)
+          })
+        }
       }
-    }
 
-    // Monitor transport errors
-    connection.transport.onerror = (error: Error) => {
-      console.error(`Transport error:`, error)
-      this.closeConnection(serverKey)
+      // Monitor transport errors for all transport types
+      connection.transport.onerror = (error: Error) => {
+        console.error(`Transport error:`, error)
+        this.closeConnection(serverKey)
+      }
     }
   }
 
@@ -415,8 +202,10 @@ class ConnectionManager {
     if (!conn) return
 
     try {
-      await conn.client.close()
-      await conn.transport.close()
+      if (isTransportConnection(conn)) {
+        await conn.client.close()
+        await conn.transport.close()
+      }
     } catch (error) {
       console.error(`Error closing connection for ${serverKey}:`, error)
     }
@@ -435,21 +224,6 @@ class ConnectionManager {
       await this.closeConnection(serverKey)
     }
   }
-}
-
-// Batch Execution
-// Operation definitions
-interface Operation {
-  tool: string;
-  arguments: Record<string, unknown>;
-}
-
-interface OperationResult {
-  tool: string;
-  success: boolean;
-  result?: unknown
-  error?: string
-  durationMs: number
 }
 
 class BatchExecutor {
@@ -546,12 +320,11 @@ class BatchExecutor {
         )
       );
 
-      if (connection.provider) {
-        const provider = connection.provider;  // Capture in local variable to satisfy TypeScript
+      if (isProviderConnection(connection)) {
         // Use provider for execution with recovery
         result = await withRecovery(async () => {
           return Promise.race([
-            provider.executeTool(operation.tool, operation.arguments),
+            connection.provider.executeTool(operation.tool, operation.arguments),
             timeoutPromise
           ]);
         });
@@ -577,12 +350,19 @@ class BatchExecutor {
         }
       }
 
-      return {
+      const operationResult = {
         tool: operation.tool,
         success: true,
         result,
         durationMs: Date.now() - start,
+      };
+
+      if (operation.id) {
+        resultsCache.storeResult(operation.id, result);
+        console.log(`Stored result for operation ${operation.id}: ${JSON.stringify(result)}`);
       }
+
+      return operationResult;
     } catch (error) {
       return {
         tool: operation.tool,
@@ -599,109 +379,119 @@ const connectionManager = new ConnectionManager()
 const batchExecutor = new BatchExecutor(connectionManager)
 const server = new McpServer({
   name: "mcp-batchit",
-  version: "1.0.2",
+  version: "1.1.0",
 })
-
-// Define the tool's schema shape (required properties for tool registration)
-const toolSchema = {
-  targetServer: BatchArgsSchema.shape.targetServer,
-  operations: BatchArgsSchema.shape.operations,
-  options: BatchArgsSchema.shape.options,
-}
-
 server.tool(
   "batch_execute",
-  `
-Execute multiple operations in batch on a specified MCP server. You must provide a real MCP server (like @modelcontextprotocol/server-filesystem). The aggregator will reject any attempt to spawn itself.
+  `Execute operations in batch on an MCP server. Supports internal filesystem operations ("provider": "batchit-internal") and external MCP servers (stdio or websocket transport).
 
-Transport Configuration:
+Capabilities:
+1. Result Chaining: Reference operation results using \${results.operationId} syntax
+2. Atomic Execution: Operations execute as single unit with proper rollback
+3. Concurrent Processing: Independent operations run in parallel (maxConcurrent)
+4. Type-Safe: Full TypeScript support with result type preservation
+5. Error Recovery: Automatic retry for transient failures
 
-1. For stdio transport (recommended for local servers):
-   Using node with direct file path (preferred):
-   {
-     "transport": {
-       "type": "stdio",
-       "command": "node",
-       "args": ["C:/path/to/server.js"]
-     }
-   }
+Server Types:
+1. Internal Filesystem (batchit-internal):
+   Optimized local filesystem provider with direct access
+2. External MCP:
+   - stdio: Local external servers
+   - websocket: Remote server connections
 
-   Using npx (requires global npx installation):
-   {
-     "transport": {
-       "type": "stdio",
-       "command": "npx",
-       "args": ["@modelcontextprotocol/server-filesystem"]
-     }
-   }
-
-2. For WebSocket transport (for connecting to running servers):
-   {
-     "transport": {
-       "type": "websocket",
-       "url": "ws://localhost:3000"
-     }
-   }
-
-Usage:
-  - Provide "targetServer" configuration with:
-    - name: Unique identifier for the server
-    - serverType: Type and configuration of the server (filesystem, database, or generic)
-    - transport: Connection method (stdio or websocket) and its configuration
-  - Provide "operations" as an array of objects with:
-    - tool: The tool name on the target server
-    - arguments: The JSON arguments to pass
-  - Options:
-    - maxConcurrent: Maximum concurrent operations (default: 10)
-    - timeoutMs: Timeout per operation in milliseconds (default: 30000)
-    - stopOnError: Whether to stop on first error (default: false)
-    - keepAlive: Keep connection after batch completion (default: false)
-
-Complete Example:
-  {
-    "targetServer": {
-      "name": "local-fs",
-      "serverType": {
-        "type": "filesystem",
-        "config": {
-          "rootDirectory": "C:/data",
-          "watchMode": true
-        }
-      },
-       "transport": {
-        "type": "stdio",
-        "command": "node",
-         "args": ["C:/path/to/filesystem-server.js"]
+Result Chaining Example:
+\`\`\`json
+{
+  "targetServer": {
+    "name": "local-fs",
+    "serverType": {
+      "type": "filesystem",
+      "config": {
+        "rootDirectory": "c:/Users/Chewy/workspace",
+        "provider": "batchit-internal"
+      }
+    }
+  },
+  "operations": [
+    {
+      "tool": "write_file",
+      "id": "write1",
+      "arguments": {
+        "path": "c:/Users/Chewy/workspace/data.json",
+        "content": { "key": "value" }
       }
     },
-     "operations": [
-      { "tool": "createFile", "arguments": { "path": "test1.txt", "content": "Hello" } },
-      { "tool": "createFile", "arguments": { "path": "test2.txt", "content": "World" } }
-    ],
-    "options": {
-      "maxConcurrent": 3,
-      "stopOnError": true
+    {
+      "tool": "read_file",
+      "id": "read1",
+      "arguments": {
+        "path": "c:/Users/Chewy/workspace/data.json"
+      },
+      "dependsOn": "write1"
+    },
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "c:/Users/Chewy/workspace/backup.json",
+        "content": "\${results.read1}"
+      },
+      "dependsOn": "read1"
     }
-  }`,
-  toolSchema,
+  ],
+  "options": {
+    "maxConcurrent": 2,
+    "timeoutMs": 5000,
+    "stopOnError": true
+  }
+}
+\`\`\`
+
+Transport Examples:
+1. Stdio Transport:
+\`\`\`json
+{
+  "targetServer": {
+    "name": "external-fs",
+    "serverType": { "type": "filesystem" },
+    "transport": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["c:/Users/Chewy/servers/filesystem/server.js"]
+    }
+  }
+}
+\`\`\`
+
+
+Options:
+- maxConcurrent: Parallel operations (default: 5)
+- timeoutMs: Operation timeout (default: 30000)
+- stopOnError: Halt on failure (default: false)
+- keepAlive: Maintain connection (default: false)
+
+Requirements:
+- Absolute paths required
+- Operation IDs needed for dependencies
+- Provider matches serverType`,
+  BatchExecuteToolSchema,
   async (args) => {
     try {
-      const parsed = BatchArgsSchema.safeParse(args);
+      const parsed = BatchArgsSchema.safeParse(args)
       if (!parsed.success) {
-        throw new McpError(ErrorCode.InvalidParams, parsed.error.message);
+        throw new McpError(ErrorCode.InvalidParams, parsed.error.message)
       }
 
-      const { targetServer, operations, options } = parsed.data;
+      const { targetServer, operations, options } = parsed.data
 
-      const results = await batchExecutor.executeBatch(
+      const results = await batchExecutor.executeBatch( // Use batchExecutor directly
         targetServer,
         operations,
         options
-      );
+      )
 
-      return formatBatchResults(results, targetServer.name);
+      return formatBatchResults(results, targetServer.name)
     } catch (error) {
-      return formatErrorResponse(error);
+      return formatErrorResponse(error)
     }
   }
 )

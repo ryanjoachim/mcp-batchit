@@ -1,6 +1,8 @@
 import fs from "fs/promises";
 import { validatePath, PathValidationConfig } from "./pathValidation.js";
 import { applyLineDiff, LineDiffOperation } from "./lineDiff.js";
+import { trackContentModification } from "./contentTracking.js";
+import { ContentTrackingOptions } from "../types/operations.js";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { withRecovery } from "../utils/recovery.js";
 
@@ -12,10 +14,9 @@ function normalizeLineEndings(text: string): string {
 }
 
 export type ContentOperation =
-  | { mode: "overwrite"; content: string }
-  | { mode: "append"; content: string }
-  | { mode: "diff"; operations: LineDiffOperation[] }
-  | { mode: "edit"; patterns: Array<{ oldText: string; newText: string }> };
+  | { mode: "overwrite"; content: string; trackOptions?: ContentTrackingOptions }
+  | { mode: "append"; content: string; trackOptions?: ContentTrackingOptions }
+  | { mode: "diff"; operations: LineDiffOperation[]; trackOptions?: ContentTrackingOptions };
 
 /**
  * Unified interface for different file content manipulation modes
@@ -27,22 +28,25 @@ export async function updateFileContent(
 ): Promise<string> {
   return withRecovery(async () => {
     const validPath = validatePath(filePath, config);
+    const rootDirectory = config.rootDirectory;
 
     // Read existing content
     let existingContent: string;
+    let hadExistingContent = true;
     try {
       existingContent = normalizeLineEndings(await fs.readFile(validPath, "utf-8"));
     } catch (error) {
       if ((error as any).code === "ENOENT") {
-        // File doesn't exist, but that's ok for overwrite mode
-        if (operation.mode === "overwrite") {
-          existingContent = "";
-        } else {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            `File not found: ${validPath}`
-          );
-        }
+      hadExistingContent = false;
+      // File doesn't exist, but that's ok for overwrite mode
+      if (operation.mode === "overwrite") {
+        existingContent = "";
+      } else {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `File not found: ${validPath}`
+        );
+      }
       } else {
         throw error;
       }
@@ -64,72 +68,29 @@ export async function updateFileContent(
         newContent = applyLineDiff(existingContent, operation.operations);
         break;
 
-      case "edit":
-        newContent = existingContent;
-        for (const pattern of operation.patterns) {
-          const normalizedOld = normalizeLineEndings(pattern.oldText);
-          const normalizedNew = normalizeLineEndings(pattern.newText);
-
-          // Try exact match first
-          if (newContent.includes(normalizedOld)) {
-            newContent = newContent.replace(normalizedOld, normalizedNew);
-            continue;
-          }
-
-          // Attempt line-by-line matching for fuzzy replacement
-          const oldLines = normalizedOld.split("\n");
-          const contentLines = newContent.split("\n");
-          let matchFound = false;
-
-          for (let i = 0; i <= contentLines.length - oldLines.length; i++) {
-            const potentialMatch = contentLines.slice(i, i + oldLines.length);
-
-            // Check if all lines match ignoring whitespace
-            const isMatch = oldLines.every((oldLine, j) => {
-              const contentLine = potentialMatch[j];
-              return oldLine.trim() === contentLine.trim();
-            });
-
-            if (isMatch) {
-              // Preserve indentation of first line
-              const firstLineIndent = contentLines[i].match(/^\s*/)?.[0] || "";
-              const newLines = normalizedNew.split("\n").map((line, j) => {
-                // First line gets original indentation
-                if (j === 0) return firstLineIndent + line.trimStart();
-
-                // Other lines maintain relative indentation
-                const oldIndent = oldLines[j]?.match(/^\s*/)?.[0] || "";
-                const newIndent = line.match(/^\s*/)?.[0] || "";
-
-                if (oldIndent && newIndent) {
-                  const relativeIndent = newIndent.length - oldIndent.length;
-                  return firstLineIndent + " ".repeat(Math.max(0, relativeIndent)) + line.trimStart();
-                }
-
-                return line;
-              });
-
-              contentLines.splice(i, oldLines.length, ...newLines);
-              newContent = contentLines.join("\n");
-              matchFound = true;
-              break;
-            }
-          }
-
-          if (!matchFound) {
-            throw new McpError(
-              ErrorCode.InvalidParams,
-              `Could not find match for pattern: ${pattern.oldText.substring(0, 40)}...`
-            );
-          }
-        }
-        break;
     }
 
     // Write updated content
     await fs.writeFile(validPath, newContent, "utf-8");
 
-    // Return simple diff summary
-    return `File ${filePath} updated using ${operation.mode} mode`;
+    // Track content modification if options provided
+    if (operation.trackOptions?.enabled) {
+      const modificationResult = await trackContentModification(
+        validPath,
+        hadExistingContent ? "update" : "create",
+        rootDirectory,
+        hadExistingContent ? existingContent : undefined,
+        operation.trackOptions
+      );
+
+      const summary = `File ${filePath} ${hadExistingContent ? "updated" : "created"} using ${operation.mode} mode`;
+      if (modificationResult.diff) {
+        return `${summary}\n\nChanges:\n${modificationResult.diff}`;
+      }
+      return summary;
+    }
+
+    // Return simple diff summary if tracking not enabled
+    return `File ${filePath} ${hadExistingContent ? "updated" : "created"} using ${operation.mode} mode`;
   });
 }

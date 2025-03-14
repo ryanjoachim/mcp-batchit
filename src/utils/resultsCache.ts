@@ -25,6 +25,17 @@ export class ResultsCache {
   clear(): void {
     this.cache.clear();
   }
+
+  /**
+   * Debug method to view cache contents
+   */
+  debug(): { [key: string]: unknown } {
+    const contents: { [key: string]: unknown } = {};
+    this.cache.forEach((value, key) => {
+      contents[key] = value;
+    });
+    return contents;
+  }
 }
 
 /**

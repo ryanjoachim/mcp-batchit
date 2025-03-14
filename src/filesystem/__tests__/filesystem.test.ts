@@ -1,0 +1,252 @@
+import { promises as fs } from "fs"
+import path from "path"
+import os from "os"
+import sharp from "sharp"
+import { describe, it, expect, beforeEach, afterEach } from "@jest/globals"
+import { compareFiles, DiffOptions } from "../lineDiff.js"
+import { trackContentModification } from "../contentTracking.js"
+import { extractFileMetadata, generatePreview } from "../fileTypeHandlers.js"
+import { previewCache } from "../previewCache.js"
+import { McpError } from "@modelcontextprotocol/sdk/types.js"
+
+describe("Filesystem Operations", () => {
+  let testDir: string
+  let testFilePath1: string
+  let testFilePath2: string
+
+  beforeEach(async () => {
+    // Create a temporary test directory
+    testDir = path.join(os.tmpdir(), `test-${Date.now()}`)
+    await fs.mkdir(testDir, { recursive: true })
+
+    // Create test files
+    testFilePath1 = path.join(testDir, "test1.txt")
+    testFilePath2 = path.join(testDir, "test2.txt")
+  })
+
+  afterEach(async () => {
+    // Clean up test directory
+    await fs.rm(testDir, { recursive: true, force: true })
+  })
+
+  describe("Line Diffing", () => {
+    it("should detect differences between text files", async () => {
+      // Create two files with different content
+      await fs.writeFile(testFilePath1, "Line 1\nLine 2\nLine 3")
+      await fs.writeFile(testFilePath2, "Line 1\nModified Line\nLine 3")
+
+      const result = await compareFiles(testFilePath1, testFilePath2, testDir)
+
+      expect(result.isDifferent).toBe(true)
+      expect(result.isBinary).toBe(false)
+      expect(result.diff).toContain("-Line 2")
+      expect(result.diff).toContain("+Modified Line")
+    })
+
+    it("should respect diff options for whitespace and case", async () => {
+      await fs.writeFile(testFilePath1, "Line One\nLine Two")
+      await fs.writeFile(testFilePath2, "line  one\nline  two")
+
+      const options: DiffOptions = {
+        ignoreWhitespace: true,
+        ignoreCase: true,
+      }
+
+      const result = await compareFiles(
+        testFilePath1,
+        testFilePath2,
+        testDir,
+        options
+      )
+      expect(result.isDifferent).toBe(false)
+    })
+  })
+
+  describe("Content Tracking", () => {
+    it("should track file creation", async () => {
+      const content = "Test content"
+      await fs.writeFile(testFilePath1, content)
+
+      const result = await trackContentModification(
+        testFilePath1,
+        "create",
+        testDir,
+        undefined,
+        { trackSize: true, trackType: true }
+      )
+
+      expect(result.operation).toBe("create")
+      expect(result.size).toBe(content.length)
+      expect(result.type).toBe("text/plain")
+    })
+
+    it("should track file updates with diff", async () => {
+      const oldContent = "Old content\nLine to keep\nLine to remove"
+      const newContent = "Old content\nLine to keep\nNew line added"
+
+      await fs.writeFile(testFilePath1, oldContent)
+      await fs.writeFile(testFilePath1, newContent)
+
+      const result = await trackContentModification(
+        testFilePath1,
+        "update",
+        testDir,
+        oldContent,
+        { trackDiff: true, diffContextLines: 3 }
+      )
+
+      expect(result.operation).toBe("update")
+      expect(result.diff).toBeDefined()
+      expect(result.diff).toContain("-Line to remove")
+      expect(result.diff).toContain("+New line added")
+      expect(result.diff).toContain(" Line to keep")
+    })
+  })
+
+  describe("File Type Handling", () => {
+    it("should extract metadata from text files", async () => {
+      const content = "Test content"
+      const beforeWrite = Date.now()
+      await fs.writeFile(testFilePath1, content)
+
+      const metadata = await extractFileMetadata(testFilePath1)
+      const afterWrite = Date.now()
+
+      expect(metadata.lastModified).toBeInstanceOf(Date)
+      expect(metadata.lastModified.getTime()).toBeGreaterThanOrEqual(beforeWrite)
+      // Add a 1000ms buffer to account for timing variations
+      expect(metadata.lastModified.getTime()).toBeLessThanOrEqual(afterWrite + 1000)
+      expect(metadata.mimeType).toBe("text/plain")
+      expect(metadata.size).toBe(content.length)
+    })
+
+    it("should extract metadata from image files", async () => {
+      const imagePath = path.join(testDir, "test.png")
+      const width = 300
+      const height = 200
+
+      await sharp({
+        create: {
+          width,
+          height,
+          channels: 4,
+          background: { r: 255, g: 0, b: 0, alpha: 1 },
+        },
+      })
+        .png()
+        .toFile(imagePath)
+
+      const metadata = await extractFileMetadata(imagePath)
+
+      expect(metadata.mimeType).toBe("image/png")
+      expect(metadata.dimensions).toBeDefined()
+      expect(metadata.dimensions?.width).toBe(width)
+      expect(metadata.dimensions?.height).toBe(height)
+      expect(metadata.format).toBe("png")
+    })
+
+    it("should generate and cache previews", async () => {
+      // Create red image and convert to Buffer
+      const redImage = await sharp({
+        create: {
+          width: 300,
+          height: 200,
+          channels: 4,
+          background: { r: 255, g: 0, b: 0, alpha: 1 },
+        },
+      })
+        .png()
+        .toBuffer()
+
+      const imagePath = path.join(testDir, "test.png")
+      await fs.writeFile(imagePath, redImage)
+
+      const options = {
+        maxWidth: 100,
+        maxHeight: 100,
+        format: "jpeg" as const,
+        quality: 80,
+      }
+
+      // First request should generate new preview
+      const preview1 = await generatePreview(imagePath, options)
+      expect(preview1).toBeDefined()
+
+      // Second request should return cached preview
+      const preview2 = await generatePreview(imagePath, options)
+      expect(preview2).toBeDefined()
+      expect(preview1!.equals(preview2!)).toBe(true)
+
+      // Verify cache is being used
+      expect(previewCache.size()).toBe(1)
+
+      // Create completely different green image
+      const greenImage = await sharp({
+        create: {
+          width: 300,
+          height: 200,
+          channels: 4,
+          background: { r: 0, g: 255, b: 0, alpha: 1 },
+        },
+      })
+        .png()
+        .toBuffer()
+
+      // Write new image and clear cache
+      previewCache.clear()
+      await fs.writeFile(imagePath, greenImage)
+
+      // Generate new preview - should be different from red image preview
+      const preview3 = await generatePreview(imagePath, options)
+      expect(preview3).toBeDefined()
+
+      // Compare actual Buffer contents
+      expect(preview1!.toString("base64")).not.toBe(preview3!.toString("base64"))
+    })
+  })
+
+  describe("Binary File Handling", () => {
+    it("should detect binary files and compare them correctly", async () => {
+      // Create two identical binary files
+      const binary1 = Buffer.from([0xff, 0x00, 0xff, 0x00])
+      const binary2 = Buffer.from([0xff, 0x00, 0xff, 0x00])
+      const binaryPath1 = path.join(testDir, "test1.bin")
+      const binaryPath2 = path.join(testDir, "test2.bin")
+
+      await fs.writeFile(binaryPath1, binary1)
+      await fs.writeFile(binaryPath2, binary2)
+
+      const result1 = await compareFiles(binaryPath1, binaryPath2, testDir)
+      expect(result1.isBinary).toBe(true)
+      expect(result1.isDifferent).toBe(false)
+      expect(result1.diff).toContain("identical")
+
+      // Modify one binary file
+      const binary3 = Buffer.from([0xff, 0x00, 0x00, 0xff])
+      await fs.writeFile(binaryPath2, binary3)
+
+      const result2 = await compareFiles(binaryPath1, binaryPath2, testDir)
+      expect(result2.isBinary).toBe(true)
+      expect(result2.isDifferent).toBe(true)
+      expect(result2.diff).toContain("different")
+    })
+  })
+
+  describe("Error Handling", () => {
+    it("should handle invalid paths", async () => {
+      const invalidPath = path.join(testDir, "..", "invalid")
+
+      await expect(
+        compareFiles(invalidPath, testFilePath1, testDir)
+      ).rejects.toThrow(McpError)
+    })
+
+    it("should handle non-existent files", async () => {
+      const nonExistentPath = path.join(testDir, "nonexistent.txt")
+
+      await expect(
+        compareFiles(nonExistentPath, testFilePath1, testDir)
+      ).rejects.toThrow(McpError)
+    })
+  })
+})
