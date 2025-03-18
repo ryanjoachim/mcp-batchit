@@ -15,21 +15,30 @@ export function mapToMcpError(error: unknown): McpError {
 
     switch (code) {
       case "ENOENT":
-        return new McpError(ErrorCode.InvalidParams, error.message);
+        return new McpError(ErrorCode.InvalidParams, error.message, { originalError: error });
 
       case "EACCES":
       case "EPERM":
-        return new McpError(ErrorCode.InvalidParams, `Permission denied: ${error.message}`);
+        return new McpError(ErrorCode.InvalidParams, `Permission denied: ${error.message}`, { originalError: error });
 
       case "ECONNREFUSED":
       case "ECONNRESET":
-        return new McpError(ErrorCode.InternalError, error.message);
+        return new McpError(ErrorCode.InternalError, error.message, { originalError: error });
     }
   }
 
   // Default to internal error
+  const context = error instanceof Error ? {
+    originalError: error,
+    stack: error.stack,
+    name: error.name
+  } : {
+    originalError: error
+  };
+
   return new McpError(
     ErrorCode.InternalError,
-    error instanceof Error ? error.message : String(error)
+    error instanceof Error ? error.message : String(error),
+    context
   );
 }

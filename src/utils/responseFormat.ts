@@ -67,7 +67,13 @@ export function formatBatchResults(
  */
 export function formatErrorResponse(error: unknown): McpResponse {
   const mcpError = error instanceof McpError ? error :
-    new McpError(1, error instanceof Error ? error.message : String(error));
+    new McpError(1, error instanceof Error ? error.message : String(error), {
+      originalError: error,
+      ...(error instanceof Error ? {
+        stack: error.stack,
+        name: error.name
+      } : {})
+    });
 
   const textContent: TextContent = {
     type: "text",

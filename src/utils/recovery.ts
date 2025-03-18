@@ -40,7 +40,12 @@ export async function withRecovery<T>(
     try {
       return await operation();
     } catch (error) {
-      // If it's already an McpError and we're out of retries, rethrow
+      // Immediately rethrow InvalidParams errors as they are not transient
+      if (error instanceof McpError && error.code === ErrorCode.InvalidParams) {
+        throw error;
+      }
+
+      // If it's another type of McpError and we're out of retries, rethrow
       if (error instanceof McpError && retries >= cfg.maxRetries) {
         throw error;
       }

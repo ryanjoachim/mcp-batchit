@@ -178,10 +178,11 @@ export async function writeFile(
     }
   }
 
-  // Now wrap the write operation in recovery
+  // Wrap both template resolution and write operation in recovery
   return withRecovery(async () => {
-    // Handle templates and resolve references
+    // Handle template resolution and reference resolution
     let resolvedContent: unknown
+
     if (options.template) {
       // First resolve any references in the content
       const contentToResolve =
@@ -201,16 +202,20 @@ export async function writeFile(
       resolvedContent = resolveResultReferences(contentToResolve).content
     }
 
+    // Ensure we have valid content to write
+    if (resolvedContent === undefined || resolvedContent === null) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        "Template resolution failed to produce valid content"
+      )
+    }
+
     // Handle resolved objects correctly
     let finalContent: string
-    if (typeof resolvedContent === "object" && resolvedContent !== null) {
-      // If resolved content is an object, stringify it directly
+    if (typeof resolvedContent === "object") {
       finalContent = JSON.stringify(resolvedContent)
-    } else if (typeof resolvedContent === "string") {
-      finalContent = resolvedContent
     } else {
-      // Handle other types (null, undefined, etc.)
-      finalContent = ""
+      finalContent = String(resolvedContent)
     }
 
     await fs.writeFile(validPath, finalContent, "utf-8")

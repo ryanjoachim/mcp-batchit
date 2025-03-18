@@ -380,6 +380,11 @@ const batchExecutor = new BatchExecutor(connectionManager)
 const server = new McpServer({
   name: "mcp-batchit",
   version: "1.1.0",
+  capabilities: {
+    tools: {
+      batch_execute: true
+    }
+  }
 })
 server.tool(
   "batch_execute",
@@ -494,6 +499,35 @@ Requirements:
       return formatErrorResponse(error)
     }
   }
+)
+
+// Expose batch operations as a resource
+server.resource(
+  "batch",
+  "batch://operations",
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      text: JSON.stringify({
+        operations: [{
+          name: "batch_execute",
+          description: "Execute operations in batch",
+          schema: BatchExecuteToolSchema,
+          capabilities: {
+            resultChaining: true,
+            atomicExecution: true,
+            concurrentProcessing: true
+          }
+        }],
+        serverTypes: {
+          filesystem: {
+            internal: "Optimized local filesystem provider with direct access",
+            external: "External MCP filesystem servers"
+          }
+        }
+      }, null, 2)
+    }]
+  })
 )
 
 // Startup

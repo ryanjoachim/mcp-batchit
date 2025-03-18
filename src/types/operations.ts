@@ -27,6 +27,7 @@ export interface BatchExecutionOptions {
   maxConcurrent?: number;
   timeoutMs?: number;
   stopOnError?: boolean;
+  progressToken?: string;
 }
 
 /**

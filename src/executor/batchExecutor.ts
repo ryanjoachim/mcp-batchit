@@ -19,7 +19,10 @@ import { resolveResultReferences } from "../utils/resultResolver.js"
  */
 export async function executeBatch(
   operations: Operation[],
-  provider: { executeTool: (name: string, args: unknown) => Promise<unknown> },
+  provider: {
+    executeTool: (name: string, args: unknown) => Promise<unknown>,
+    notification?: (params: { method: string; params: unknown }) => Promise<void>
+  },
   options: BatchExecutionOptions = {}
 ): Promise<OperationResult[]> {
   // Set default options
@@ -46,7 +49,9 @@ export async function executeBatch(
         batch,
         provider,
         opts.maxConcurrent,
-        opts.timeoutMs
+        opts.timeoutMs,
+        options.progressToken,
+        operations.length
       )
 
       results.push(...batchResults)
@@ -69,16 +74,39 @@ export async function executeBatch(
  */
 async function executeBatchWithConcurrency(
   batch: Operation[],
-  provider: { executeTool: (name: string, args: unknown) => Promise<unknown> },
+  provider: {
+    executeTool: (name: string, args: unknown) => Promise<unknown>,
+    notification?: (params: { method: string; params: unknown }) => Promise<void>
+  },
   maxConcurrent: number,
-  timeoutMs: number
+  timeoutMs: number,
+  progressToken?: string,
+  totalOperations?: number
 ): Promise<OperationResult[]> {
   const results: OperationResult[] = []
+  let completedOperations = 0
 
   for (let i = 0; i < batch.length; i += maxConcurrent) {
     const chunk = batch.slice(i, i + maxConcurrent)
     const chunkResults = await Promise.all(
-      chunk.map((operation) => executeOperation(operation, provider, timeoutMs))
+      chunk.map(async (operation) => {
+        const result = await executeOperation(operation, provider, timeoutMs)
+
+        // Update progress after each operation if progressToken is provided
+        if (progressToken && totalOperations && provider.notification) {
+          completedOperations++
+          await provider.notification({
+            method: "notifications/progress",
+            params: {
+              progressToken,
+              progress: completedOperations,
+              total: totalOperations
+            }
+          })
+        }
+
+        return result
+      })
     )
     results.push(...chunkResults)
   }

@@ -1,3 +1,4 @@
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
 import Handlebars from "handlebars"
 import { resultsCache } from "./resultsCache.js"
 
@@ -21,18 +22,24 @@ export function clearTemplateCache() {
   templateCache.clear()
 }
 
+// Configure strict mode for better error handling
+hbs.registerHelper("helperMissing", function () {
+  throw new Error(`Helper not found: ${arguments[arguments.length - 1].name}`)
+})
+
 // Register basic helpers
-hbs.registerHelper('json', (context) => {
+hbs.registerHelper("json", (context) => {
   // Match project's JSON formatting pattern
-  return new Handlebars.SafeString(
-    JSON.stringify(context, null, 2)
-  )
+  return new Handlebars.SafeString(JSON.stringify(context, null, 2))
 })
-hbs.registerHelper('parseJson', (str) => {
-  try { return JSON.parse(str) }
-  catch { return {} }
+hbs.registerHelper("parseJson", (str) => {
+  try {
+    return JSON.parse(str)
+  } catch {
+    return {}
+  }
 })
-hbs.registerHelper('now', () => new Date().toISOString())
+hbs.registerHelper("now", () => new Date().toISOString())
 
 /**
  * Resolves Handlebars templates in operation arguments.
@@ -56,25 +63,52 @@ hbs.registerHelper('now', () => new Date().toISOString())
  * @param args - Operation arguments containing optional template
  * @returns Arguments with resolved template content
  */
-export function resolveTemplates(args: Record<string, any>): Record<string, any> {
+export function resolveTemplates(
+  args: Record<string, any>
+): Record<string, any> {
   if (!args.template) return args
 
+  // Try to get from cache first
   let template = templateCache.get(args.template)
+
   if (!template) {
-    template = hbs.compile(args.template)
-    templateCache.set(args.template, template)
+    try {
+      // Compile the template
+      template = hbs.compile(args.template)
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error)
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `Template compilation error: ${errorMessage}`
+      )
+    }
   }
-  // Include content in template context along with results and now
+
+  // Prepare the context
   const context = {
     content: args.content,
     results: resultsCache.debug(),
-    now: new Date().toISOString()
+    now: new Date().toISOString(),
   }
-  const result = template(context)
+
+  let renderedContent: string
+  try {
+    // Execute the template
+    renderedContent = template(context)
+    // Only cache if execution succeeds
+    templateCache.set(args.template, template)
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Template runtime error: ${errorMessage}`
+    )
+  }
 
   return {
     ...args,
-    content: result,
-    template: undefined
+    content: renderedContent,
+    template: undefined,
   }
 }
