@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/ryanjoachim-mcp-batchit-badge.png)](https://mseep.ai/app/ryanjoachim-mcp-batchit)
+
 
 <div align="center">
 
