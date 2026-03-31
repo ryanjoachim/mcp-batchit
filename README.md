@@ -1,7 +1,6 @@
-
 # MCP BatchIt
 
-**Batch multiple MCP tool calls into a single request with built-in templating, result chaining, and an enhanced filesystem provider.**
+**Batch multiple MCP tool calls into a single request with built-in templating, result chaining, and an enhanced high-performance filesystem provider.**
 
 [](https://opensource.org/licenses/MIT)
 
@@ -9,51 +8,53 @@
 
 ## 🚀 Overview
 
-**MCP BatchIt** is an advanced aggregator for the [Model Context Protocol](https://modelcontext.ai/). While standard MCP agents are often limited to one tool call per turn, BatchIt allows you to execute complex, multi-step workflows in a single round trip.
+**MCP BatchIt** is a sophisticated orchestrator for the [Model Context Protocol](https://modelcontext.ai/). While standard MCP agents typically operate in a "one tool, one turn" loop, BatchIt empowers LLMs to execute complex, multi-step execution graphs in a single round trip.
 
-It features a **built-in high-performance Filesystem Provider**, removing the need to spawn external filesystem servers for common tasks while adding "superpowers" like PDF/DOCX extraction and image previews.
+By combining a **Dependency-Aware Executor** with a **High-Performance Internal Filesystem**, BatchIt reduces latency, minimizes token usage for repetitive tasks, and adds "superpowers" like PDF/DOCX extraction and image preview generation that standard filesystem servers lack.
 
 -----
 
 ## ✨ Key Capabilities
 
-### 1\. Advanced Batch Execution
+### 1\. Intelligent Batch Execution
 
-  * **Dependency Management:** Use the `dependsOn` field to create execution graphs. BatchIt automatically calculates the correct order of operations.
-  * **Parallel Processing:** Control throughput with `maxConcurrent` to speed up independent tasks.
-  * **Resiliency:** Built-in exponential backoff recovery for transient failures.
+* **Dependency Graphs:** Use the `dependsOn` field to define execution order. BatchIt builds a directed acyclic graph (DAG) and executes tasks as soon as their dependencies are met.
+* **Parallel Processing:** Configurable `maxConcurrent` settings allow you to blast through independent operations (like reading 20 files at once) without bottlenecking.
+* **Resiliency & Recovery:** Built-in exponential backoff automatically handles transient filesystem locks or network hiccups.
 
-### 2\. Result Chaining & Templating
+### 2\. Result Chaining & "Magic" Templating
 
-BatchIt allows data to flow seamlessly between steps in a single batch:
+Stop manually copying outputs from one tool into the arguments of the next.
 
-  * **Variable Injection:** Reference results from previous operations using `{{results.stepId.property}}` syntax.
-  * **Handlebars Engine:** Full support for templates, including helpers like `{{now}}`, `{{json}}`, and `{{parseJson}}`.
-  * **Dynamic Arguments:** Resolve file paths or content dynamically based on the output of earlier search or read operations.
+* **Variable Injection:** Reference any previous output using `{{results.operationId.path.to.property}}`.
+* **Handlebars Power:** Full Handlebars integration allows for complex logic, including helpers like `{{now}}`, `{{json}}`, and `{{parseJson}}`.
+* **Dynamic Path Resolution:** Automatically resolve file paths or configuration values discovered during the batch.
+
+### 3\. Enhanced Filesystem Provider
+
+The `batchit-internal` provider is designed for speed and rich metadata. It’s not just a wrapper; it’s a full-featured suite.
 
 -----
 
-## 📂 Built-in Filesystem Provider
+## 📂 Internal Tool Reference
 
-The server includes a native filesystem provider (`batchit-internal`) that provides enhanced functionality beyond standard implementations:
-
-| Tool | Description | Key Features |
+| Tool | Capability | Unique "Superpowers" |
 | :--- | :--- | :--- |
-| `read_file` | Reads file content | Supports line numbers and automatic **PDF/DOCX** text extraction. |
-| `write_file` | Writes file content | Supports Handlebars templates and optional **content tracking** (diffs, size, MIME). |
-| `search_files` | Advanced file search | Supports Glob/Regex with content previews and context lines. |
-| `directory_tree` | Visualizes structure | Generates JSON or text-based tree representations with metadata. |
-| `edit_file` | Line-based patching | Apply precise text edits with dry-run support and diff generation. |
-| `get_file_info` | Metadata retrieval | Returns detailed stats, permissions, and MIME types. |
-| `generate_preview`| Image processing | Creates cached thumbnails/previews for JPEG, PNG, and WebP images. |
+| `read_file` | Read text/binary | **OCR-like Extraction:** Automatically converts PDF and DOCX to clean text. Supports line numbering. |
+| `write_file` | Create/Overwrite | **Atomic Writing:** Supports Handlebars templates and **Content Tracking** (generates diffs, size stats, and MIME types). |
+| `edit_file` | Patching | **Search & Replace:** Apply precise line-based edits with `dryRun` support and visual diff generation. |
+| `search_files` | Search | **Contextual Grep:** Supports Glob/Regex with content previews and surrounding context lines. |
+| `directory_tree` | Visualization | Generates JSON or "tree-view" text structures with file sizes and modification dates. |
+| `generate_preview`| Image Processing | Generates cached thumbnails for JPEG, PNG, and WebP via `sharp`. |
+| `get_file_info` | Metadata | Deep inspection including permissions, exact MIME types, and timestamps. |
 
 -----
 
-## 🛠 Usage Example
+## 🛠 Workflow Examples
 
-### Chained Internal Filesystem Operations
+### Example: The "Analyze and Document" Chain
 
-This example searches for a configuration file and uses its path to perform a read, all in one request.
+This single request finds a specific source file, reads it (extracting text if it's a doc), and generates a summary file using a template.
 
 ```jsonc
 {
@@ -61,24 +62,28 @@ This example searches for a configuration file and uses its path to perform a re
     "name": "internal-fs",
     "serverType": {
       "type": "filesystem",
-      "config": {
-        "rootDirectory": "/app/project",
-        "provider": "batchit-internal"
-      }
+      "config": { "rootDirectory": "/src/project", "provider": "batchit-internal" }
     }
   },
   "operations": [
     {
-      "id": "find_config",
+      "id": "find_logic",
       "tool": "search_files",
-      "arguments": { "pattern": "**/config.json" }
+      "arguments": { "pattern": "**/core_logic.ts" }
     },
     {
-      "id": "read_config",
+      "id": "read_src",
       "tool": "read_file",
-      "dependsOn": "find_config",
+      "dependsOn": "find_logic",
+      "arguments": { "path": "{{results.find_logic.[0].path}}" }
+    },
+    {
+      "id": "generate_docs",
+      "tool": "write_file",
+      "dependsOn": "read_src",
       "arguments": {
-        "path": "{{results.find_config.[0].path}}"
+        "path": "docs/analysis.md",
+        "template": "# Analysis of {{results.find_logic.[0].path}}\n\nGenerated: {{now}}\n\nContent Summary:\n{{results.read_src}}"
       }
     }
   ]
@@ -87,29 +92,67 @@ This example searches for a configuration file and uses its path to perform a re
 
 -----
 
-## ⚙️ Configuration Options
+## ⚙️ Configuration & Options
 
 | Option | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `maxConcurrent` | `number` | `1` | Max operations to run simultaneously. |
-| `stopOnError` | `boolean` | `true` | Halts subsequent operations if one fails. |
-| `timeoutMs` | `number` | `30000` | Timeout per individual operation. |
-| `keepAlive` | `boolean` | `true` | Caches external MCP server connections to reduce overhead. |
+| `maxConcurrent` | `number` | `1` | Number of operations to run in parallel within a batch. |
+| `stopOnError` | `boolean` | `true` | If true, fails the entire batch if a single operation errors out. |
+| `timeoutMs` | `number` | `30000` | Global timeout for the batch execution. |
+| `keepAlive` | `boolean` | `true` | Maintains persistent connections to external MCP servers. |
 
 -----
 
 ## 📦 Installation
 
-```bash
-git clone https://github.com/ryanjoachim/mcp-batchit.git
-cd mcp-batchit
-npm install
-npm run build
-npm start
+1. **Clone the Repository:**
+
+    ```bash
+    git clone https://github.com/ryanjoachim/mcp-batchit.git
+    cd mcp-batchit
+    ```
+
+2. **Install Dependencies:**
+
+    ```bash
+    npm install
+    ```
+
+3. **Build & Start:**
+
+    ```bash
+    npm run build
+    npm start
+    ```
+
+### Integration with Claude Desktop
+
+Add this to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "batchit": {
+      "command": "node",
+      "args": ["/path/to/mcp-batchit/build/index.js"],
+      "env": {
+        "NODE_ENV": "dev"
+      }
+    }
+  }
+}
 ```
+
+-----
+
+## 🛡 Security & Constraints
+
+* **Path Validation:** All internal filesystem operations are sandboxed to the `rootDirectory`. Efforts to escape using `../` are blocked.
+* **Recursion Protection:** BatchIt includes checks to prevent it from attempting to call itself as an external transport, avoiding infinite loops.
+* **Excluded Directories:** You can define `excludedDirs` (e.g., `node_modules`, `.git`) to prevent accidental heavy processing or data leaks.
 
 -----
 
 ## 📝 License
 
-This project is licensed under the **MIT License**.
+This project is licensed under the **MIT License**. Created with ❤️ for the MCP ecosystem.
