@@ -1,40 +1,42 @@
-import { OperationResult } from "../types/operations.js";
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { OperationResult } from "../types/schemas/batch.js"
+import { McpError } from "@modelcontextprotocol/sdk/types.js"
 
 type TextContent = {
-  type: "text";
-  text: string;
-  [key: string]: unknown;
-};
+  type: "text"
+  text: string
+  [key: string]: unknown
+}
 
 type ImageContent = {
-  type: "image";
-  data: string;
-  mimeType: string;
-  [key: string]: unknown;
-};
+  type: "image"
+  data: string
+  mimeType: string
+  [key: string]: unknown
+}
 
 type ResourceContent = {
-  type: "resource";
-  resource: {
-    text: string;
-    uri: string;
-    mimeType?: string;
-    [key: string]: unknown;
-  } | {
-    uri: string;
-    blob: string;
-    mimeType?: string;
-    [key: string]: unknown;
-  };
-  [key: string]: unknown;
-};
+  type: "resource"
+  resource:
+    | {
+        text: string
+        uri: string
+        mimeType?: string
+        [key: string]: unknown
+      }
+    | {
+        uri: string
+        blob: string
+        mimeType?: string
+        [key: string]: unknown
+      }
+  [key: string]: unknown
+}
 
-type McpContent = TextContent | ImageContent | ResourceContent;
+type McpContent = TextContent | ImageContent | ResourceContent
 
 interface McpResponse {
-  content: McpContent[];
-  [key: string]: unknown;
+  content: McpContent[]
+  [key: string]: unknown
 }
 
 /**
@@ -46,47 +48,66 @@ export function formatBatchResults(
 ): McpResponse {
   const textContent: TextContent = {
     type: "text",
-    text: JSON.stringify({
-      targetServer: serverName,
-      summary: {
-        successCount: results.filter(r => r.success).length,
-        failCount: results.filter(r => !r.success).length,
-        totalDurationMs: results.reduce((sum, r) => sum + (r.durationMs || 0), 0),
+    text: JSON.stringify(
+      {
+        targetServer: serverName,
+        summary: {
+          successCount: results.filter((r) => r.success).length,
+          failCount: results.filter((r) => !r.success).length,
+          totalDurationMs: results.reduce(
+            (sum, r) => sum + (r.durationMs || 0),
+            0
+          ),
+        },
+        operations: results,
       },
-      operations: results
-    }, null, 2)
-  };
+      null,
+      2
+    ),
+  }
 
   return {
-    content: [textContent]
-  };
+    content: [textContent],
+  }
 }
 
 /**
  * Formats an error into a standardized response
  */
 export function formatErrorResponse(error: unknown): McpResponse {
-  const mcpError = error instanceof McpError ? error :
-    new McpError(1, error instanceof Error ? error.message : String(error), {
-      originalError: error,
-      ...(error instanceof Error ? {
-        stack: error.stack,
-        name: error.name
-      } : {})
-    });
+  const mcpError =
+    error instanceof McpError
+      ? error
+      : new McpError(
+          1,
+          error instanceof Error ? error.message : String(error),
+          {
+            originalError: error,
+            ...(error instanceof Error
+              ? {
+                  stack: error.stack,
+                  name: error.name,
+                }
+              : {}),
+          }
+        )
 
   const textContent: TextContent = {
     type: "text",
-    text: JSON.stringify({
-      error: {
-        code: mcpError.code,
-        message: mcpError.message
-      }
-    }, null, 2)
-  };
+    text: JSON.stringify(
+      {
+        error: {
+          code: mcpError.code,
+          message: mcpError.message,
+        },
+      },
+      null,
+      2
+    ),
+  }
 
   return {
     content: [textContent],
-    isError: true
-  };
+    isError: true,
+  }
 }

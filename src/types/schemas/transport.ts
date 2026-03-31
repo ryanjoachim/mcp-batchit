@@ -36,12 +36,9 @@ export type TransportConfig = StdioTransportConfig | WebSocketTransportConfig
  */
 export const StdioTransportConfigSchema = z.object({
   type: z.literal("stdio"),
-  command: z.string()
-    .describe("Command to execute"),
-  args: z.array(z.string()).optional()
-    .describe("Command arguments"),
-  env: z.record(z.string()).optional()
-    .describe("Environment variables")
+  command: z.string().describe("Command to execute"),
+  args: z.array(z.string()).optional().describe("Command arguments"),
+  env: z.record(z.string()).optional().describe("Environment variables"),
 })
 
 /**
@@ -49,17 +46,19 @@ export const StdioTransportConfigSchema = z.object({
  */
 export const WebSocketTransportConfigSchema = z.object({
   type: z.literal("websocket"),
-  url: z.string()
-    .describe("WebSocket URL (ws:// or wss://)"),
-  options: z.record(z.unknown()).optional()
-    .describe("WebSocket connection options")
+  url: z.string().describe("WebSocket URL (ws:// or wss://)"),
+  options: z
+    .record(z.unknown())
+    .optional()
+    .describe("WebSocket connection options"),
 })
 
 /**
  * Schema for transport configuration discriminated union
  */
-export const TransportConfigSchema = z.discriminatedUnion("type", [
-  StdioTransportConfigSchema,
-  WebSocketTransportConfigSchema
-])
+export const TransportConfigSchema = z
+  .discriminatedUnion("type", [
+    StdioTransportConfigSchema,
+    WebSocketTransportConfigSchema,
+  ])
   .describe("Transport configuration (required for external providers)")

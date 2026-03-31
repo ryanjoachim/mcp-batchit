@@ -8,6 +8,7 @@ import { trackContentModification } from "../contentTracking.js"
 import { extractFileMetadata, generatePreview } from "../fileTypeHandlers.js"
 import { previewCache } from "../previewCache.js"
 import { McpError } from "@modelcontextprotocol/sdk/types.js"
+import { FileSystem } from "../FileSystem.js"
 
 describe("Filesystem Operations", () => {
   let testDir: string
@@ -109,15 +110,24 @@ describe("Filesystem Operations", () => {
       const beforeWrite = Date.now()
       await fs.writeFile(testFilePath1, content)
 
+      // Get file metadata and stats separately
       const metadata = await extractFileMetadata(testFilePath1)
+      const stats = await fs.stat(testFilePath1)
       const afterWrite = Date.now()
 
-      expect(metadata.lastModified).toBeInstanceOf(Date)
-      expect(metadata.lastModified.getTime()).toBeGreaterThanOrEqual(beforeWrite)
+      // Test file stats
+      expect(new Date(stats.mtime)).toBeInstanceOf(Date)
+      expect(new Date(stats.mtime).getTime()).toBeGreaterThanOrEqual(
+        beforeWrite
+      )
       // Add a 1000ms buffer to account for timing variations
-      expect(metadata.lastModified.getTime()).toBeLessThanOrEqual(afterWrite + 1000)
+      expect(new Date(stats.mtime).getTime()).toBeLessThanOrEqual(
+        afterWrite + 1000
+      )
+      expect(stats.size).toBe(content.length)
+
+      // Test metadata
       expect(metadata.mimeType).toBe("text/plain")
-      expect(metadata.size).toBe(content.length)
     })
 
     it("should extract metadata from image files", async () => {
@@ -135,13 +145,13 @@ describe("Filesystem Operations", () => {
       })
         .png()
         .toFile(imagePath)
-
       const metadata = await extractFileMetadata(imagePath)
 
       expect(metadata.mimeType).toBe("image/png")
       expect(metadata.dimensions).toBeDefined()
       expect(metadata.dimensions?.width).toBe(width)
       expect(metadata.dimensions?.height).toBe(height)
+      expect(metadata["format"]).toBe("png")
       expect(metadata.format).toBe("png")
     })
 
@@ -201,7 +211,9 @@ describe("Filesystem Operations", () => {
       expect(preview3).toBeDefined()
 
       // Compare actual Buffer contents
-      expect(preview1!.toString("base64")).not.toBe(preview3!.toString("base64"))
+      expect(preview1!.toString("base64")).not.toBe(
+        preview3!.toString("base64")
+      )
     })
   })
 
@@ -247,6 +259,262 @@ describe("Filesystem Operations", () => {
       await expect(
         compareFiles(nonExistentPath, testFilePath1, testDir)
       ).rejects.toThrow(McpError)
+    })
+  })
+})
+
+describe("FileSystem Class", () => {
+  let tmpDir: string
+  let filesystem: FileSystem
+
+  beforeEach(async () => {
+    // Create unique temp directory for each test
+    tmpDir = path.join(os.tmpdir(), `test-${Date.now()}`)
+    await fs.mkdir(tmpDir, { recursive: true })
+
+    filesystem = new FileSystem({
+      rootDirectory: tmpDir,
+      excludedDirs: [path.join(tmpDir, "excluded")],
+    })
+  })
+
+  afterEach(async () => {
+    // Clean up temp directory after each test
+    await fs.rm(tmpDir, { recursive: true, force: true })
+  })
+
+  describe("readFile", () => {
+    it("should read text file content", async () => {
+      const testPath = path.join(tmpDir, "test.txt")
+      const testContent = "Hello, world!"
+      await fs.writeFile(testPath, testContent)
+
+      const content = await filesystem.readFile(testPath)
+      expect(content).toBe(testContent)
+    })
+
+    it("should reject paths outside root directory", async () => {
+      const outsidePath = path.join(os.tmpdir(), "outside.txt")
+
+      await expect(filesystem.readFile(outsidePath)).rejects.toThrow(McpError)
+    })
+  })
+
+  describe("readFiles", () => {
+    it("should read multiple files concurrently", async () => {
+      const files = [
+        { path: "file1.txt", content: "Content 1" },
+        { path: "file2.txt", content: "Content 2" },
+        { path: "file3.txt", content: "Content 3" },
+      ]
+
+      for (const file of files) {
+        const filePath = path.join(tmpDir, file.path)
+        await fs.writeFile(filePath, file.content)
+      }
+
+      const results = await filesystem.readFiles(
+        files.map((f) => path.join(tmpDir, f.path))
+      )
+
+      expect(results).toHaveLength(3)
+      expect(results.every((r) => r.content && !r.error)).toBe(true)
+      expect(results.map((r) => r.content)).toEqual([
+        "Content 1",
+        "Content 2",
+        "Content 3",
+      ])
+    })
+
+    it("should handle errors in concurrent reads", async () => {
+      const files = [
+        { path: "exists1.txt", content: "Content 1" },
+        { path: "missing.txt", content: null },
+        { path: "exists2.txt", content: "Content 2" },
+      ]
+
+      for (const file of files) {
+        if (file.content) {
+          const filePath = path.join(tmpDir, file.path)
+          await fs.writeFile(filePath, file.content)
+        }
+      }
+
+      const results = await filesystem.readFiles(
+        files.map((f) => path.join(tmpDir, f.path))
+      )
+
+      expect(results).toHaveLength(3)
+      expect(results[0].content).toBe("Content 1")
+      expect(results[1].error).toBeDefined()
+      expect(results[2].content).toBe("Content 2")
+    })
+
+    describe("writeFile", () => {
+      it("should handle template resolution", async () => {
+        const testPath = path.join(tmpDir, "template.txt")
+        const template = "Hello, {{name}}!"
+        const content = { name: "world" }
+
+        const result = await filesystem.writeFile(testPath, content, {
+          template,
+        })
+
+        expect(result.content).toBe("Hello, world!")
+        const written = await fs.readFile(testPath, "utf-8")
+        expect(written).toBe("Hello, world!")
+      })
+
+      it("should handle result chaining with previousResult", async () => {
+        const testPath = path.join(tmpDir, "chained.txt")
+        const previousResult = { key: "value" }
+
+        const result = await filesystem.writeFile(
+          testPath,
+          "placeholder",
+          {},
+          previousResult
+        )
+
+        expect(result.content).toBe(JSON.stringify(previousResult))
+        const written = await fs.readFile(testPath, "utf-8")
+        expect(JSON.parse(written)).toEqual(previousResult)
+      })
+
+      it("should create directories as needed", async () => {
+        const testPath = path.join(tmpDir, "nested", "deep", "test.txt")
+        const content = "Nested content"
+
+        await filesystem.writeFile(testPath, content)
+
+        const written = await fs.readFile(testPath, "utf-8")
+        expect(written).toBe(content)
+
+        const dirExists = await fs
+          .stat(path.dirname(testPath))
+          .then(() => true)
+          .catch(() => false)
+        expect(dirExists).toBe(true)
+      })
+    })
+
+    describe("moveFile", () => {
+      it("should move file to new location", async () => {
+        const sourcePath = path.join(tmpDir, "source.txt")
+        const destPath = path.join(tmpDir, "dest.txt")
+        const content = "Test content"
+
+        await fs.writeFile(sourcePath, content)
+        await filesystem.moveFile(sourcePath, destPath)
+
+        // Source should not exist
+        await expect(fs.access(sourcePath)).rejects.toThrow()
+
+        // Destination should have content
+        const movedContent = await fs.readFile(destPath, "utf-8")
+        expect(movedContent).toBe(content)
+      })
+
+      it("should create destination directory if needed", async () => {
+        const sourcePath = path.join(tmpDir, "source.txt")
+        const destPath = path.join(tmpDir, "nested", "deep", "dest.txt")
+        const content = "Test content"
+
+        await fs.writeFile(sourcePath, content)
+        await filesystem.moveFile(sourcePath, destPath)
+
+        const movedContent = await fs.readFile(destPath, "utf-8")
+        expect(movedContent).toBe(content)
+      })
+
+      it("should throw InvalidParams for non-existent source", async () => {
+        const sourcePath = path.join(tmpDir, "nonexistent.txt")
+        const destPath = path.join(tmpDir, "dest.txt")
+
+        await expect(filesystem.moveFile(sourcePath, destPath)).rejects.toThrow(
+          McpError
+        )
+      })
+    })
+
+    describe("excludedDirs", () => {
+      it("should prevent operations in excluded directories", async () => {
+        // Create test file in excluded directory
+        const excludedDir = path.join(tmpDir, "excluded")
+        const excludedFile = path.join(excludedDir, "test.txt")
+        await fs.mkdir(excludedDir, { recursive: true })
+        await fs.writeFile(excludedFile, "Test content")
+
+        // Attempt operations on excluded file
+        await expect(filesystem.readFile(excludedFile)).rejects.toThrow(
+          McpError
+        )
+
+        await expect(
+          filesystem.writeFile(excludedFile, "New content")
+        ).rejects.toThrow(McpError)
+
+        await expect(filesystem.deleteFile(excludedFile)).rejects.toThrow(
+          McpError
+        )
+      })
+    })
+
+    describe("deleteFile", () => {
+      it("should delete existing file", async () => {
+        const filePath = path.join(tmpDir, "delete.txt")
+        await fs.writeFile(filePath, "Test content")
+
+        await filesystem.deleteFile(filePath)
+
+        await expect(fs.access(filePath)).rejects.toThrow()
+      })
+
+      it("should throw InvalidParams for non-existent file", async () => {
+        const filePath = path.join(tmpDir, "nonexistent.txt")
+
+        await expect(filesystem.deleteFile(filePath)).rejects.toThrow(McpError)
+      })
+    })
+
+    describe("copyFile", () => {
+      it("should copy file to new location", async () => {
+        const sourcePath = path.join(tmpDir, "source.txt")
+        const destPath = path.join(tmpDir, "dest.txt")
+        const content = "Test content"
+
+        await fs.writeFile(sourcePath, content)
+        await filesystem.copyFile(sourcePath, destPath)
+
+        // Source should still exist
+        const sourceContent = await fs.readFile(sourcePath, "utf-8")
+        expect(sourceContent).toBe(content)
+
+        // Destination should have content
+        const copiedContent = await fs.readFile(destPath, "utf-8")
+        expect(copiedContent).toBe(content)
+      })
+
+      it("should create destination directory if needed", async () => {
+        const sourcePath = path.join(tmpDir, "source.txt")
+        const destPath = path.join(tmpDir, "nested", "deep", "dest.txt")
+        const content = "Test content"
+
+        await fs.writeFile(sourcePath, content)
+        await filesystem.copyFile(sourcePath, destPath)
+
+        const copiedContent = await fs.readFile(destPath, "utf-8")
+        expect(copiedContent).toBe(content)
+      })
+
+      it("should throw InvalidParams for non-existent source", async () => {
+        const sourcePath = path.join(tmpDir, "nonexistent.txt")
+        const destPath = path.join(tmpDir, "dest.txt")
+
+        await expect(filesystem.copyFile(sourcePath, destPath)).rejects.toThrow(
+          McpError
+        )
+      })
     })
   })
 })

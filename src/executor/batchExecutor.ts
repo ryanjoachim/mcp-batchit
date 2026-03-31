@@ -1,8 +1,8 @@
 import {
   Operation,
-  BatchExecutionOptions,
+  BatchOptions as BatchExecutionOptions,
   OperationResult,
-} from "../types/operations.js"
+} from "../types/schemas/batch.js"
 import { resolveTemplates } from "../utils/templateResolver.js"
 import {
   createOrderedBatches,
@@ -10,26 +10,33 @@ import {
 } from "../utils/dependencyOrder.js"
 import { resultsCache } from "../utils/resultsCache.js"
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
-import { withRecovery } from "../utils/recovery.js"
 import { mapToMcpError } from "../utils/errorMapper.js"
 import { resolveResultReferences } from "../utils/resultResolver.js"
+
+interface OperationResponse {
+  success?: boolean
+  result?: unknown
+  [key: string]: unknown
+}
+
+interface Provider {
+  executeTool: (name: string, args: unknown) => Promise<unknown>
+  notification?: (params: { method: string; params: unknown }) => Promise<void>
+}
 
 /**
  * Executes a batch of operations with dependency ordering
  */
 export async function executeBatch(
   operations: Operation[],
-  provider: {
-    executeTool: (name: string, args: unknown) => Promise<unknown>,
-    notification?: (params: { method: string; params: unknown }) => Promise<void>
-  },
-  options: BatchExecutionOptions = {}
+  provider: Provider,
+  options?: Partial<BatchExecutionOptions>
 ): Promise<OperationResult[]> {
   // Set default options
   const opts = {
-    maxConcurrent: options.maxConcurrent || 5,
-    timeoutMs: options.timeoutMs || 30000,
-    stopOnError: options.stopOnError || false,
+    maxConcurrent: options?.maxConcurrent || 5,
+    timeoutMs: options?.timeoutMs || 30000,
+    stopOnError: options?.stopOnError || false,
   }
 
   // Validate dependencies and create ordered batches
@@ -50,7 +57,7 @@ export async function executeBatch(
         provider,
         opts.maxConcurrent,
         opts.timeoutMs,
-        options.progressToken,
+        options?.progressToken,
         operations.length
       )
 
@@ -74,10 +81,7 @@ export async function executeBatch(
  */
 async function executeBatchWithConcurrency(
   batch: Operation[],
-  provider: {
-    executeTool: (name: string, args: unknown) => Promise<unknown>,
-    notification?: (params: { method: string; params: unknown }) => Promise<void>
-  },
+  provider: Provider,
   maxConcurrent: number,
   timeoutMs: number,
   progressToken?: string,
@@ -100,8 +104,8 @@ async function executeBatchWithConcurrency(
             params: {
               progressToken,
               progress: completedOperations,
-              total: totalOperations
-            }
+              total: totalOperations,
+            },
           })
         }
 
@@ -119,46 +123,56 @@ async function executeBatchWithConcurrency(
  */
 async function executeOperation(
   operation: Operation,
-  provider: { executeTool: (name: string, args: unknown) => Promise<unknown> },
+  provider: Provider,
   timeoutMs: number
 ): Promise<OperationResult> {
+  // Create timeout promise
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => {
+      reject(new McpError(ErrorCode.RequestTimeout, "Operation timed out"))
+    }, timeoutMs)
+  })
+
+  let result: unknown
+
   try {
-    // Create timeout promise
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => {
-        reject(new McpError(ErrorCode.RequestTimeout, "Operation timed out"))
-      }, timeoutMs)
-    })
+    // Resolve arguments
+    const resolvedArgs = resolveResultReferences(operation.arguments || {})
+    const templatedArgs = resolveTemplates(resolvedArgs)
 
-      let previousResult: unknown
+    // Execute operation
+    result = await Promise.race([
+      provider.executeTool(operation.tool, templatedArgs),
+      timeoutPromise,
+    ])
 
-      // Execute operation with timeout and recovery
-      const result = await withRecovery(async () => {
-        const resolvedArgs = resolveResultReferences(operation.arguments || {})
-        const templatedArgs = resolveTemplates(resolvedArgs)
-
-        return Promise.race([
-          provider.executeTool(operation.tool, {
-            ...templatedArgs,
-            previousResult,
-          }),
-        timeoutPromise,
-      ])
-    })
-
-    // Update previousResult for the next operation
-    previousResult = result // Assign the result to previousResult
-
-    // Store result in cache
+    // Store result for chaining
     if (operation.id) {
       resultsCache.storeResult(operation.id, result)
     }
 
+    // For write_file operations, always succeed if execution completed
+    if (operation.tool === "write_file") {
+      return {
+        id: operation.id,
+        tool: operation.tool,
+        success: true,
+        result: result,
+      }
+    }
+
+    // For other operations, determine success from result
+    const hasSuccess =
+      typeof result === "object" && result !== null && "success" in result
+    const finalSuccess = hasSuccess
+      ? Boolean((result as OperationResponse).success)
+      : true
+
     return {
       id: operation.id,
       tool: operation.tool,
-      success: true,
-      result,
+      success: finalSuccess,
+      result: result,
     }
   } catch (error) {
     const mappedError = mapToMcpError(error)

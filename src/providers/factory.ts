@@ -1,9 +1,11 @@
 import { ProviderType } from "../types/provider.js"
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
-import * as fileOps from "../filesystem/fileOperations.js"
-import * as dirOps from "../filesystem/directoryOperations.js"
-import { updateFileContent } from "../filesystem/contentEditor.js"
-import { WriteFileOptions } from "../filesystem/fileOperations.js"
+import {
+  FileSystem,
+  WriteOptions,
+  ReadOptions,
+} from "../filesystem/FileSystem.js"
+import { UpdateOperation } from "../types/filesystem/operations.js"
 
 export interface Provider {
   executeTool(name: string, args: unknown): Promise<unknown>
@@ -32,7 +34,10 @@ export function createProvider(
 }
 
 function createInternalFilesystemProvider(rootDirectory: string): Provider {
-  const config = { rootDirectory }
+  const fs = new FileSystem({
+    rootDirectory,
+    maxConcurrent: 10, // Default concurrent operations limit
+  })
 
   return {
     async executeTool(name: string, args: unknown): Promise<unknown> {
@@ -51,11 +56,10 @@ function createInternalFilesystemProvider(rootDirectory: string): Provider {
               "Missing required 'path' parameter"
             )
           }
-          return fileOps.readFile(
+          return fs.readFile(
             String(args.path),
-            config,
             "options" in args && typeof args.options === "object"
-              ? (args.options as any)
+              ? (args.options as ReadOptions)
               : {}
           )
 
@@ -78,48 +82,81 @@ function createInternalFilesystemProvider(rootDirectory: string): Provider {
             content?: unknown
             template?: string
             path: string
-            options?: WriteFileOptions
+            options?: WriteOptions
           }
 
-          const result = await fileOps.writeFile(
+          const result = await fs.writeFile(
             String(restArgs.path),
             restArgs.content !== undefined ? restArgs.content : "",
-            config,
-            restArgs.options
+            restArgs.options,
+            previousResult
           )
           return result.content
 
-        case "create_directory":
-          if (!("paths" in args)) {
+        case "read_files":
+          if (!("paths" in args) || !Array.isArray(args.paths)) {
             throw new McpError(
               ErrorCode.InvalidParams,
-              "Missing required 'paths' parameter"
+              "Missing or invalid 'paths' parameter"
             )
           }
-          await dirOps.createDirectory(args.paths as string | string[], config)
-          return "Directory created successfully"
+          return fs.readFiles(
+            args.paths as string[],
+            "options" in args && typeof args.options === "object"
+              ? (args.options as ReadOptions)
+              : {}
+          )
 
-        case "list_directory":
+        case "move_file":
+          if (!("sourcePath" in args) || !("destPath" in args)) {
+            throw new McpError(
+              ErrorCode.InvalidParams,
+              "Missing required parameters: sourcePath and/or destPath"
+            )
+          }
+          await fs.moveFile(String(args.sourcePath), String(args.destPath), {
+            overwrite: "overwrite" in args ? Boolean(args.overwrite) : false,
+          })
+          return "File moved successfully"
+
+        case "copy_file":
+          if (!("sourcePath" in args) || !("destPath" in args)) {
+            throw new McpError(
+              ErrorCode.InvalidParams,
+              "Missing required parameters: sourcePath and/or destPath"
+            )
+          }
+          await fs.copyFile(String(args.sourcePath), String(args.destPath))
+          return "File copied successfully"
+
+        case "delete_file":
           if (!("path" in args)) {
             throw new McpError(
               ErrorCode.InvalidParams,
               "Missing required 'path' parameter"
             )
           }
-          return dirOps.listDirectory(String(args.path), config)
+          await fs.deleteFile(String(args.path))
+          return "File deleted successfully"
 
         case "update_file":
+        case "edit_file": // Support legacy name while promoting update_file in docs
           if (!("path" in args) || !("operation" in args)) {
             throw new McpError(
               ErrorCode.InvalidParams,
               "Missing required parameters"
             )
           }
-          return updateFileContent(
-            String(args.path),
-            args.operation as any,
-            config
-          )
+          // Create a proper UpdateOperation object
+          const updateOp: UpdateOperation = {
+            operation: "update",
+            path: String(args.path),
+            mode: (args.operation as any).mode,
+            content: (args.operation as any).content,
+            diff: (args.operation as any).diff,
+            tracking: (args.operation as any).tracking,
+          }
+          return fs.updateFile(updateOp)
 
         default:
           throw new McpError(

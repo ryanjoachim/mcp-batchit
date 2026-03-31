@@ -87,7 +87,8 @@ export function resolveTemplates(
 
   // Prepare the context
   const context = {
-    content: args.content,
+    ...args.content, // Spread content properties directly into context
+    content: args.content, // Keep original content for backward compatibility
     results: resultsCache.debug(),
     now: new Date().toISOString(),
   }

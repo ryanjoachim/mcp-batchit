@@ -2,13 +2,14 @@ import { promises as fs } from "fs"
 import path from "path"
 import os from "os"
 import { describe, it, expect, beforeEach, afterEach } from "@jest/globals"
-import { writeFile } from "../fileOperations.js"
+import { FileSystem } from "../FileSystem.js"
 import { resultsCache } from "../../utils/resultsCache.js"
 import { clearTemplateCache } from "../../utils/templateResolver.js"
 
 describe("Template File Operations", () => {
   let testDir: string
   let testFilePath: string
+  let fileSystem: FileSystem
 
   beforeEach(async () => {
     testDir = path.join(os.tmpdir(), `test-${Date.now()}`)
@@ -17,13 +18,14 @@ describe("Template File Operations", () => {
     testFilePath = path.join(testDir, "test.txt")
     resultsCache.clear()
     clearTemplateCache()
+    fileSystem = new FileSystem({ rootDirectory: testDir })
   })
 
   afterEach(async () => {
     if (!testDir) return
 
-    // Wait for any pending file operations to complete
-    await new Promise(resolve => setTimeout(resolve, 100))
+    // Wait longer for any pending file operations to complete
+    await new Promise((resolve) => setTimeout(resolve, 500))
 
     // Attempt cleanup with improved retry logic
     const maxRetries = 3
@@ -33,26 +35,32 @@ describe("Template File Operations", () => {
         return
       } catch (error: any) {
         if (i === maxRetries - 1) {
-          console.warn(`Failed to clean up test directory after ${maxRetries} attempts: ${error.message}`)
+          console.warn(
+            `Failed to clean up test directory after ${maxRetries} attempts: ${error.message}`
+          )
         } else {
           // Exponential backoff
-          await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 100))
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.pow(2, i) * 100)
+          )
         }
       }
     }
   })
 
   it("should handle basic templates", async () => {
-    const result = await writeFile(
+    const result = await fileSystem.writeFile(
       testFilePath,
       { name: "test" },
-      { rootDirectory: testDir },
       {
         template: "Hello {{content.name}}!",
       }
     )
 
     expect(result.content).toBe("Hello test!")
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
     const fileContent = await fs.readFile(testFilePath, "utf-8")
     expect(fileContent).toBe("Hello test!")
   })
@@ -61,14 +69,9 @@ describe("Template File Operations", () => {
     const data = { user: { name: "test", age: 25 } }
     const jsonFilePath = path.join(testDir, "test.json")
 
-    const result = await writeFile(
-      jsonFilePath,
-      data,
-      { rootDirectory: testDir },
-      {
-        template: "{{{json content.user}}}",
-      }
-    )
+    const result = await fileSystem.writeFile(jsonFilePath, data, {
+      template: "{{{json content.user}}}",
+    })
 
     expect(result.content).toBe(JSON.stringify(data.user, null, 2))
 
@@ -82,10 +85,9 @@ describe("Template File Operations", () => {
   it("should use previous results in templates", async () => {
     resultsCache.storeResult("prevOp", { value: "test value" })
 
-    const result = await writeFile(
+    const result = await fileSystem.writeFile(
       testFilePath,
       { current: "current value" },
-      { rootDirectory: testDir },
       {
         template:
           "Previous: {{results.prevOp.value}}, Current: {{content.current}}",
@@ -98,10 +100,9 @@ describe("Template File Operations", () => {
   })
 
   it("should handle the now helper in templates", async () => {
-    const result = await writeFile(
+    const result = await fileSystem.writeFile(
       testFilePath,
       {},
-      { rootDirectory: testDir },
       {
         template: "Created at: {{now}}",
       }
@@ -119,10 +120,9 @@ describe("Template File Operations", () => {
   it("should handle parseJson helper in templates", async () => {
     resultsCache.storeResult("jsonString", '{"key":"value"}')
 
-    const result = await writeFile(
+    const result = await fileSystem.writeFile(
       testFilePath,
       {},
-      { rootDirectory: testDir },
       {
         template:
           "{{#with (parseJson results.jsonString)}}Key: {{key}}{{/with}}",
@@ -136,20 +136,18 @@ describe("Template File Operations", () => {
 
   it("should handle template cache", async () => {
     // First write
-    await writeFile(
+    await fileSystem.writeFile(
       testFilePath,
       { value: "first" },
-      { rootDirectory: testDir },
       {
         template: "Value: {{content.value}}",
       }
     )
 
     // Second write with same template
-    const result = await writeFile(
+    const result = await fileSystem.writeFile(
       testFilePath,
       { value: "second" },
-      { rootDirectory: testDir },
       {
         template: "Value: {{content.value}}",
       }
@@ -182,14 +180,9 @@ describe("Template File Operations", () => {
       created: new Date().toISOString(),
     }
 
-    const result = await writeFile(
-      metadataPath,
-      metadata,
-      { rootDirectory: testDir },
-      {
-        template: "{{{json content}}}",
-      }
-    )
+    const result = await fileSystem.writeFile(metadataPath, metadata, {
+      template: "{{{json content}}}",
+    })
 
     expect(result.content).toBe(JSON.stringify(metadata, null, 2))
 
@@ -218,30 +211,26 @@ describe("Template File Operations", () => {
       },
     }
 
-    const result = await writeFile(
-      testFilePath,
-      data,
-      { rootDirectory: testDir },
-      {
-        template:
-          "{{content.project.name}} v{{content.project.version}} - Enabled: {{content.project.config.settings.enabled}}",
-      }
-    )
+    const result = await fileSystem.writeFile(testFilePath, data, {
+      template:
+        "{{content.project.name}} v{{content.project.version}} - Enabled: {{content.project.config.settings.enabled}}",
+    })
 
     expect(result.content).toBe("Test Project v1.0.0 - Enabled: true")
   })
 
   it("should handle error cases gracefully", async () => {
     // Try to use a non-existent helper
-    await expect(writeFile(
-      testFilePath,
-      { data: "test" },
-      { rootDirectory: testDir },
-      {
-        template:
-          "{{#nonExistentHelper}}{{content.data}}{{/nonExistentHelper}}",
-      }
-    )).rejects.toThrow(/nonExistentHelper/)
+    await expect(
+      fileSystem.writeFile(
+        testFilePath,
+        { data: "test" },
+        {
+          template:
+            "{{#nonExistentHelper}}{{content.data}}{{/nonExistentHelper}}",
+        }
+      )
+    ).rejects.toThrow(/nonExistentHelper/)
   })
 
   it("should maintain template cache for performance", async () => {
@@ -249,19 +238,13 @@ describe("Template File Operations", () => {
     const template = "Name: {{content.name}}"
 
     // First use
-    await writeFile(
-      testFilePath,
-      { name: "First" },
-      { rootDirectory: testDir },
-      { template }
-    )
+    await fileSystem.writeFile(testFilePath, { name: "First" }, { template })
 
     // Second use - should use cached template
     const start = performance.now()
-    const result = await writeFile(
+    const result = await fileSystem.writeFile(
       testFilePath,
       { name: "Second" },
-      { rootDirectory: testDir },
       { template }
     )
     const duration = performance.now() - start

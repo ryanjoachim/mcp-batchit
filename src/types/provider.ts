@@ -1,17 +1,16 @@
-
-export type ProviderType = "batchit-internal" | "external";
+export type ProviderType = "batchit-internal" | "external"
 
 export interface ServerIdentity {
-  name: string;
+  name: string
   serverType: {
-    type: string;
+    type: string
     config: {
-      rootDirectory?: string;
-      provider?: ProviderType;
-    };
-  };
+      rootDirectory?: string
+      provider?: ProviderType
+    }
+  }
   transport?: {
-    type: "stdio" | "websocket";
-    [key: string]: unknown;
-  };
+    type: "stdio" | "websocket"
+    [key: string]: unknown
+  }
 }

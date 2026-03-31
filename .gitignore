@@ -14,10 +14,12 @@ dist/
 .history
 .idea/
 .vscode/
+.repomix/
 *.swp
 *.swo
 .DS_Store
 .docs/
+docs/
 memory-bank/
 
 # Logs

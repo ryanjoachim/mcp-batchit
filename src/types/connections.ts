@@ -44,14 +44,18 @@ export type ServerConnection = TransportConnection | ProviderConnection
 /**
  * Type guard for TransportConnection
  */
-export function isTransportConnection(conn: ServerConnection): conn is TransportConnection {
+export function isTransportConnection(
+  conn: ServerConnection
+): conn is TransportConnection {
   return conn.type === "transport"
 }
 
 /**
  * Type guard for ProviderConnection
  */
-export function isProviderConnection(conn: ServerConnection): conn is ProviderConnection {
+export function isProviderConnection(
+  conn: ServerConnection
+): conn is ProviderConnection {
   return conn.type === "provider"
 }
 
@@ -70,7 +74,7 @@ export function createTransportConnection(
     transport,
     childProcess,
     lastUsed: Date.now(),
-    identity
+    identity,
   }
 }
 
@@ -85,6 +89,6 @@ export function createProviderConnection(
     type: "provider",
     provider,
     lastUsed: Date.now(),
-    identity
+    identity,
   }
 }

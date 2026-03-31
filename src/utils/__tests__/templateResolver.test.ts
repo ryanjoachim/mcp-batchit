@@ -16,12 +16,12 @@ describe("templateResolver", () => {
     resultsCache.storeResult("op1", "test value")
 
     const args = {
-      template: "Content: {{results.op1}}"
+      template: "Content: {{results.op1}}",
     }
 
     expect(resolveTemplates(args)).toEqual({
       content: "Content: test value",
-      template: undefined
+      template: undefined,
     })
   })
 
@@ -29,43 +29,45 @@ describe("templateResolver", () => {
     resultsCache.storeResult("op1", { value: "test" })
 
     const args = {
-      template: "{{json results.op1}}"
+      template: "{{json results.op1}}",
     }
 
     expect(resolveTemplates(args)).toEqual({
       content: `{
   "value": "test"
 }`,
-      template: undefined
+      template: undefined,
     })
   })
 
   it("resolves now helper", () => {
     const args = {
-      template: "Created: {{now}}"
+      template: "Created: {{now}}",
     }
 
     const result = resolveTemplates(args)
     expect(result.template).toBeUndefined()
     expect(typeof result.content).toBe("string")
-    expect(result.content).toMatch(/Created: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/)
+    expect(result.content).toMatch(
+      /Created: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/
+    )
   })
 
   it("resolves parseJson helper", () => {
     const args = {
-      template: "{{#with (parseJson '{\"key\":\"value\"}')}}{{key}}{{/with}}"
+      template: '{{#with (parseJson \'{"key":"value"}\')}}{{key}}{{/with}}',
     }
 
     expect(resolveTemplates(args)).toEqual({
       content: "value",
-      template: undefined
+      template: undefined,
     })
   })
 
   describe("template caching", () => {
     it("caches and reuses compiled templates", () => {
       const args = {
-        template: "Value: {{results.op1}}"
+        template: "Value: {{results.op1}}",
       }
 
       resultsCache.storeResult("op1", "first")
@@ -79,10 +81,10 @@ describe("templateResolver", () => {
 
     it("uses different cache entries for different templates", () => {
       const template1 = {
-        template: "Value 1: {{results.op1}}"
+        template: "Value 1: {{results.op1}}",
       }
       const template2 = {
-        template: "Value 2: {{results.op1}}"
+        template: "Value 2: {{results.op1}}",
       }
 
       resultsCache.storeResult("op1", "test")
@@ -96,7 +98,7 @@ describe("templateResolver", () => {
 
     it("clears template cache", () => {
       const args = {
-        template: "Value: {{results.op1}}"
+        template: "Value: {{results.op1}}",
       }
 
       resultsCache.storeResult("op1", "first")

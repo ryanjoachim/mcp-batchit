@@ -1,90 +1,52 @@
 /**
- * Represents a single operation to be executed
+ * Re-export types from the consolidated type system
  */
-export interface Operation {
-  id?: string;
-  tool: string;
-  arguments?: Record<string, unknown> & {
-    template?: string;
-    content?: unknown;
-  };
-  dependsOn?: string | string[];
-}
+import {
+  Operation,
+  OperationResult,
+  BatchOptions as BatchExecutionOptions,
+} from "./schemas/batch.js"
+import {
+  ContentModification,
+  ContentTrackingOptions,
+} from "./filesystem/contentTracking.js"
+
+export { Operation, OperationResult, BatchExecutionOptions }
+export { ContentModification, ContentTrackingOptions }
 
 /**
  * Operation arguments with template support
  */
 export interface TemplateArguments {
-  template?: string;
-  content?: unknown;
-  [key: string]: unknown;
-}
-
-/**
- * Options for batch execution
- */
-export interface BatchExecutionOptions {
-  maxConcurrent?: number;
-  timeoutMs?: number;
-  stopOnError?: boolean;
-  progressToken?: string;
-}
-
-/**
- * Result of an operation execution
- */
-export interface OperationResult {
-  id?: string;
-  tool: string;
-  success: boolean;
-  result?: unknown;
-  error?: string;
-  errorCode?: number;
-  durationMs?: number;
-}
-
-/**
- * Represents a file content modification
- */
-export interface ContentModification {
-  timestamp: string;
-  path: string;
-  operation: "create" | "update" | "delete";
-  size?: number;
-  type?: string;
-  diff?: string;
-}
-
-/**
- * Options for content tracking
- */
-export interface ContentTrackingOptions {
-  enabled?: boolean;
-  trackSize?: boolean;
-  trackType?: boolean;
-  trackDiff?: boolean;
-  diffContextLines?: number;
+  template?: string
+  content?: unknown
+  [key: string]: unknown
 }
 
 /**
  * Operation with content tracking details
  */
 export interface ContentTrackingOperation extends Operation {
-  contentTracking?: ContentTrackingOptions;
+  contentTracking?: ContentTrackingOptions
 }
 
 /**
  * Operation result with content tracking details
  */
 export interface ContentTrackingResult extends OperationResult {
-  contentModification?: ContentModification;
+  contentModification?: ContentModification
 }
 
 /**
- * Operation with template support
+ * Operation with template support.
+ * Used primarily with write_file and update_file tools.
  */
 export interface TemplateOperation extends Operation {
-  arguments?: Record<string, unknown> & {
-    template?: string;
-  };
+  arguments: Record<string, unknown> & {
+    /**
+     * Template string for dynamic content generation.
+     * Can reference results from previous operations using ${results.operationId}
+     */
+    template?: string
+  }
 }

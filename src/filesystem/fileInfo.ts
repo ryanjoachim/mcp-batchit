@@ -1,21 +1,21 @@
-import fs from "fs/promises";
-import path from "path";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import { getMimeType } from "./fileTypeHandlers.js";
+import fs from "fs/promises"
+import path from "path"
+import { ErrorManager } from "../utils/errorManager.js"
+import { getMimeType } from "./fileTypeHandlers.js"
 
 /**
  * Represents detailed information about a file or directory
  */
 export interface FileInfo {
-  size: number;
-  created: string;
-  modified: string;
-  accessed: string;
-  isDirectory: boolean;
-  isFile: boolean;
-  permissions: string;
-  isSymlink?: boolean;
-  mimeType?: string;
+  size: number
+  created: string
+  modified: string
+  accessed: string
+  isDirectory: boolean
+  isFile: boolean
+  permissions: string
+  isSymlink?: boolean
+  mimeType?: string
 }
 
 /**
@@ -28,41 +28,38 @@ export async function getFileInfo(
   try {
     // Basic path validation
     if (!path.isAbsolute(filePath)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Path must be absolute: ${filePath}`
-      );
+      throw ErrorManager.createPathValidationError(
+        filePath,
+        "Must be absolute path"
+      )
     }
 
-    const normalized = path.normalize(filePath);
+    const normalized = path.normalize(filePath)
 
     if (normalized.includes("..")) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Path cannot contain parent directory references (..): ${normalized}`
-      );
+      throw ErrorManager.createPathValidationError(
+        normalized,
+        "Cannot contain parent directory references (..)"
+      )
     }
 
     if (!normalized.startsWith(path.normalize(rootDirectory))) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Path must be within root directory ${rootDirectory}: ${normalized}`
-      );
+      throw ErrorManager.createPathValidationError(
+        normalized,
+        `Must be within root directory ${rootDirectory}`
+      )
     }
 
     // Ensure path exists
     try {
-      await fs.access(normalized);
+      await fs.access(normalized)
     } catch {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Path not found: ${normalized}`
-      );
+      throw ErrorManager.createNotFoundError("File or directory", normalized)
     }
 
     // Get file/directory stats
-    const stats = await fs.stat(normalized);
-    const lstat = await fs.lstat(normalized);
+    const stats = await fs.stat(normalized)
+    const lstat = await fs.lstat(normalized)
 
     const info: FileInfo = {
       size: stats.size,
@@ -72,26 +69,22 @@ export async function getFileInfo(
       isDirectory: stats.isDirectory(),
       isFile: stats.isFile(),
       permissions: stats.mode.toString(8).slice(-3),
-      isSymlink: lstat.isSymbolicLink()
-    };
+      isSymlink: lstat.isSymbolicLink(),
+    }
 
     // Add MIME type for files
     if (info.isFile) {
-      const mimeType = getMimeType(normalized);
+      const mimeType = getMimeType(normalized)
       if (mimeType) {
-        info.mimeType = mimeType;
+        info.mimeType = mimeType
       }
     }
 
-    return info;
+    return info
   } catch (error) {
-    if (error instanceof McpError) {
-      throw error;
-    }
-
-    throw new McpError(
-      ErrorCode.InternalError,
-      `Failed to get file info: ${error instanceof Error ? error.message : String(error)}`
-    );
+    throw ErrorManager.normalizeError(
+      error,
+      `Failed to get file info for ${path.basename(filePath)}`
+    )
   }
 }

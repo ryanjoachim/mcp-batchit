@@ -1,115 +1,144 @@
-import fs from "fs/promises";
-import path from "path";
-import { isBinaryFile } from "isbinaryfile";
-import { getMimeType } from "./fileTypeHandlers.js";
-import { compareFiles } from "./lineDiff.js";
-import { previewCache } from "./previewCache.js";
-import { ContentModification, ContentTrackingOptions } from "../types/operations.js";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+/**
+ * @fileoverview
+ * Content tracking utilities for monitoring file changes.
+ *
+ * This module provides functions to track content modifications and generate diffs
+ * between file versions. It supports tracking file size, type, and content changes.
+ */
+import fs from "fs/promises"
+import path from "path"
+import { isBinaryFile } from "isbinaryfile"
+import { FileSystem } from "./FileSystem.js"
+import { getMimeType } from "./fileTypeHandlers.js"
+import { compareFiles } from "./lineDiff.js"
+import { previewCache } from "./previewCache.js"
+import {
+  ContentModification,
+  ContentTrackingOptions,
+  ContentOperationType,
+} from "../types/filesystem/contentTracking.js"
+import { ErrorManager } from "../utils/errorManager.js"
 
 /**
  * Creates a content modification record for a file operation
  */
 export async function trackContentModification(
   filePath: string,
-  operation: "create" | "update" | "delete",
+  operation: ContentOperationType,
   rootDirectory: string,
   oldContent?: string,
-  options: ContentTrackingOptions = {}
+  options: Partial<ContentTrackingOptions> = { enabled: true }
 ): Promise<ContentModification> {
+  // Ensure options has the required 'enabled' property
+  const trackingOptions: ContentTrackingOptions = {
+    enabled: options.enabled ?? true,
+    trackSize: options.trackSize,
+    trackType: options.trackType,
+    trackDiff: options.trackDiff,
+    diffContextLines: options.diffContextLines,
+  }
   try {
-    const normalized = path.normalize(filePath);
+    const normalized = path.normalize(filePath)
 
     // Basic path validation
     if (!path.isAbsolute(normalized)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Path must be absolute: ${normalized}`
-      );
+      throw ErrorManager.createPathValidationError(
+        normalized,
+        "Must be absolute path"
+      )
     }
 
     if (normalized.includes("..")) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Path cannot contain parent directory references (..): ${normalized}`
-      );
+      throw ErrorManager.createPathValidationError(
+        normalized,
+        "Cannot contain parent directory references (..)"
+      )
     }
 
     if (!normalized.startsWith(path.normalize(rootDirectory))) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Path must be within root directory ${rootDirectory}: ${normalized}`
-      );
+      throw ErrorManager.createPathValidationError(
+        normalized,
+        `Must be within root directory ${rootDirectory}`
+      )
     }
 
+    // Create the content modification object using the new type
     const modification: ContentModification = {
       timestamp: new Date().toISOString(),
       path: normalized,
-      operation
-    };
+      operation,
+    }
 
     // Invalidate preview cache when file is modified or deleted
     if (operation === "update" || operation === "delete") {
-      previewCache.invalidate(normalized);
+      previewCache.invalidate(normalized)
     }
 
     // Don't try to get additional info for deleted files
     if (operation === "delete") {
-      return modification;
+      return modification
     }
 
+    const fileSystem = new FileSystem({
+      rootDirectory,
+      excludedDirs: [], // Explicitly provide empty excludedDirs for clarity
+    })
+
     try {
-      const stats = await fs.stat(normalized);
+      const stats = await fs.stat(normalized)
 
       // Track file size if requested
-      if (options.trackSize) {
-        modification.size = stats.size;
+      if (trackingOptions.trackSize) {
+        modification.size = stats.size
       }
 
       // Track file type if requested
-      if (options.trackType) {
+      if (trackingOptions.trackType) {
         if (await isBinaryFile(normalized)) {
-          modification.type = "binary";
+          modification.type = "binary"
         } else {
-          const mimeType = getMimeType(normalized);
-          modification.type = mimeType || "text/plain";
+          const mimeType = getMimeType(normalized)
+          modification.type = mimeType || "text/plain"
         }
       }
 
       // Track diff if requested and this is an update
-      if (options.trackDiff && operation === "update" && oldContent) {
+      if (trackingOptions.trackDiff && operation === "update" && oldContent) {
         // Create temporary file for old content
-        const tmpOld = path.join(path.dirname(normalized), `.tmp_old_${Date.now()}`);
+        const tmpOld = path.join(
+          path.dirname(normalized),
+          `.tmp_old_${Date.now()}`
+        )
         try {
-          await fs.writeFile(tmpOld, oldContent);
-          const { diff } = await compareFiles(tmpOld, normalized, rootDirectory, {
-            contextLines: options.diffContextLines
-          });
-          modification.diff = diff;
+          await fileSystem.writeFile(tmpOld, oldContent)
+          const { diff } = await compareFiles(
+            tmpOld,
+            normalized,
+            rootDirectory,
+            {
+              contextLines: trackingOptions.diffContextLines,
+            }
+          )
+          modification.diff = diff
         } finally {
           try {
-            await fs.unlink(tmpOld);
+            await fileSystem.deleteFile(tmpOld)
           } catch {
             // Ignore cleanup errors
           }
         }
       }
-
     } catch (error) {
       // If we can't get additional info, just return basic modification info
-      return modification;
+      return modification
     }
 
-    return modification;
+    return modification
   } catch (error) {
-    if (error instanceof McpError) {
-      throw error;
-    }
-
-    throw new McpError(
-      ErrorCode.InternalError,
-      `Failed to track content modification: ${error instanceof Error ? error.message : String(error)}`
-    );
+    throw ErrorManager.normalizeError(
+      error,
+      `Failed to track ${operation} operation for ${path.basename(filePath)}`
+    )
   }
 }
 
@@ -117,29 +146,41 @@ export async function trackContentModification(
  * Tracks multiple content modifications in batch
  */
 export async function trackContentModifications(
-  modifications: { path: string; operation: "create" | "update" | "delete"; oldContent?: string }[],
+  modifications: {
+    path: string
+    operation: ContentOperationType
+    oldContent?: string
+  }[],
   rootDirectory: string,
-  options: ContentTrackingOptions = {}
+  options: Partial<ContentTrackingOptions> = { enabled: true }
 ): Promise<ContentModification[]> {
-  const results: ContentModification[] = [];
-  const maxConcurrent = 5;
+  // Ensure options has the required 'enabled' property
+  const trackingOptions: ContentTrackingOptions = {
+    enabled: options.enabled ?? true,
+    trackSize: options.trackSize,
+    trackType: options.trackType,
+    trackDiff: options.trackDiff,
+    diffContextLines: options.diffContextLines,
+  }
+  const results: ContentModification[] = []
+  const maxConcurrent = 5
 
   // Process modifications in batches to control concurrency
   for (let i = 0; i < modifications.length; i += maxConcurrent) {
-    const batch = modifications.slice(i, i + maxConcurrent);
+    const batch = modifications.slice(i, i + maxConcurrent)
     const batchResults = await Promise.all(
-      batch.map(mod =>
+      batch.map((mod) =>
         trackContentModification(
           mod.path,
           mod.operation,
           rootDirectory,
           mod.oldContent,
-          options
+          trackingOptions
         )
       )
-    );
-    results.push(...batchResults);
+    )
+    results.push(...batchResults)
   }
 
-  return results;
+  return results
 }

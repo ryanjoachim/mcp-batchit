@@ -1,22 +1,24 @@
-import fs from "fs/promises";
-import { validatePath, PathValidationConfig } from "./pathValidation.js";
-import { withRecovery } from "../utils/recovery.js";
+import fs from "fs/promises"
+import { validatePathWithResult } from "./pathValidation.js"
+import { PathOptions } from "../types/filesystem/paths.js"
+import { withRecovery } from "../utils/recovery.js"
 
 /**
  * Creates directories, including parent directories if needed
  */
 export async function createDirectory(
   dirPath: string | string[],
-  config: PathValidationConfig
+  config: PathOptions
 ): Promise<void> {
   return withRecovery(async () => {
-    const paths = Array.isArray(dirPath) ? dirPath : [dirPath];
+    const paths = Array.isArray(dirPath) ? dirPath : [dirPath]
 
     for (const p of paths) {
-      const validPath = validatePath(p, config);
-      await fs.mkdir(validPath, { recursive: true });
+      const validResult = validatePathWithResult(p, config)
+      const validPath = validResult.normalizedPath
+      await fs.mkdir(validPath, { recursive: true })
     }
-  });
+  })
 }
 
 /**
@@ -24,15 +26,18 @@ export async function createDirectory(
  */
 export async function listDirectory(
   dirPath: string,
-  config: PathValidationConfig
+  config: PathOptions
 ): Promise<string> {
   return withRecovery(async () => {
-    const validPath = validatePath(dirPath, config);
+    const validResult = validatePathWithResult(dirPath, config)
+    const validPath = validResult.normalizedPath
 
-    const entries = await fs.readdir(validPath, { withFileTypes: true });
+    const entries = await fs.readdir(validPath, { withFileTypes: true })
 
     return entries
-      .map(entry => `${entry.isDirectory() ? "[DIR]" : "[FILE]"} ${entry.name}`)
-      .join("\n");
-  });
+      .map(
+        (entry) => `${entry.isDirectory() ? "[DIR]" : "[FILE]"} ${entry.name}`
+      )
+      .join("\n")
+  })
 }

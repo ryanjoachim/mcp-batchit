@@ -153,7 +153,7 @@ In this initial phase, we gather information from the filesystem by reading nece
     "serverType": {
       "type": "filesystem",
       "config": {
-        "rootDirectory": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit"
+        "rootDirectory": "C:/Users/User/Documents/GitHub/ryanjoachim/mcp-batchit"
       }
     },
     "transport": {
@@ -164,7 +164,7 @@ In this initial phase, we gather information from the filesystem by reading nece
         "npx",
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit"
+        "C:/Users/User/Documents/GitHub/ryanjoachim/mcp-batchit"
       ]
     }
   },
@@ -172,13 +172,13 @@ In this initial phase, we gather information from the filesystem by reading nece
     {
       "tool": "read_file",
       "arguments": {
-        "path": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit/package.json"
+        "path": "C:/Users/User/Documents/GitHub/ryanjoachim/mcp-batchit/package.json"
       }
     },
     {
       "tool": "read_file",
       "arguments": {
-        "path": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit/README.md"
+        "path": "C:/Users/User/Documents/GitHub/ryanjoachim/mcp-batchit/README.md"
       }
     }
   ],
@@ -215,7 +215,7 @@ The final phase combines data from previous steps (file contents and code defini
     "serverType": {
       "type": "filesystem",
       "config": {
-        "rootDirectory": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit"
+        "rootDirectory": "C:/Users/User/Documents/GitHub/ryanjoachim/mcp-batchit"
       }
     },
     "transport": {
@@ -226,7 +226,7 @@ The final phase combines data from previous steps (file contents and code defini
         "npx",
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit"
+        "C:/Users/User/Documents/GitHub/ryanjoachim/mcp-batchit"
       ]
     }
   },
@@ -234,41 +234,41 @@ The final phase combines data from previous steps (file contents and code defini
     {
       "tool": "create_directory",
       "arguments": {
-        "path": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit/memory-bank"
+        "path": "C:/Users/User/Documents/GitHub/ryanjoachim/mcp-batchit/memory-bank"
       }
     },
     {
       "tool": "write_file",
       "arguments": {
-        "path": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit/memory-bank/productContext.md",
+        "path": "C:/Users/User/Documents/GitHub/ryanjoachim/mcp-batchit/memory-bank/productContext.md",
         "content": "# MCP BatchIt Product Context\\n\\n## Purpose\\n..."
       }
     },
     {
       "tool": "write_file",
       "arguments": {
-        "path": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit/memory-bank/systemPatterns.md",
+        "path": "C:/Users/User/Documents/GitHub/ryanjoachim/mcp-batchit/memory-bank/systemPatterns.md",
         "content": "# MCP BatchIt System Patterns\\n\\n## Architecture Overview\\n..."
       }
     },
     {
       "tool": "write_file",
       "arguments": {
-        "path": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit/memory-bank/techContext.md",
+        "path": "C:/Users/User/Documents/GitHub/ryanjoachim/mcp-batchit/memory-bank/techContext.md",
         "content": "# MCP BatchIt Technical Context\\n\\n## Technology Stack\\n..."
       }
     },
     {
       "tool": "write_file",
       "arguments": {
-        "path": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit/memory-bank/progress.md",
+        "path": "C:/Users/User/Documents/GitHub/ryanjoachim/mcp-batchit/memory-bank/progress.md",
         "content": "# MCP BatchIt Progress Status\\n\\n## Completed Features\\n..."
       }
     },
     {
       "tool": "write_file",
       "arguments": {
-        "path": "C:/Users/Chewy/Documents/GitHub/ryanjoachim/mcp-batchit/memory-bank/activeContext.md",
+        "path": "C:/Users/User/Documents/GitHub/ryanjoachim/mcp-batchit/memory-bank/activeContext.md",
         "content": "# MCP BatchIt Active Context\\n\\n## Current Status\\n..."
       }
     }

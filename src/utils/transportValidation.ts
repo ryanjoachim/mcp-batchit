@@ -24,11 +24,16 @@ export const SELF_REFERENCE_PATTERNS = [
 /**
  * Validates a stdio command to ensure it's not trying to spawn BatchIt itself
  */
-export function validateStdioCommand(command: string, args: string[] = []): void {
+export function validateStdioCommand(
+  command: string,
+  args: string[] = []
+): void {
   const fullCommand = [command, ...args].join(" ")
-  if (SELF_REFERENCE_PATTERNS.some(pattern =>
-    fullCommand.toLowerCase().includes(pattern.toLowerCase())
-  )) {
+  if (
+    SELF_REFERENCE_PATTERNS.some((pattern) =>
+      fullCommand.toLowerCase().includes(pattern.toLowerCase())
+    )
+  ) {
     throw new McpError(
       ErrorCode.InvalidParams,
       "Cannot spawn the BatchIt aggregator itself"
@@ -50,10 +55,7 @@ export function validateWebSocketUrl(url: string): void {
     }
   } catch (error) {
     if (error instanceof McpError) throw error
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      "Invalid WebSocket URL"
-    )
+    throw new McpError(ErrorCode.InvalidParams, "Invalid WebSocket URL")
   }
 }
 
@@ -77,14 +79,16 @@ export function validateTransport(transport: TransportConfig): void {
 /**
  * Gets transport configuration from server identity, handling filesystem provider cases
  */
-export function getTransportConfig(identity: ServerIdentity): TransportConfig | undefined {
+export function getTransportConfig(
+  identity: ServerIdentity
+): TransportConfig | undefined {
   // For filesystem servers, handle provider selection
   if (identity.serverType.type === "filesystem") {
-    const { provider = "external" } = identity.serverType.config;
+    const { provider = "external" } = identity.serverType.config
 
     // Internal provider doesn't need external transport
     if (provider === "batchit-internal") {
-      return undefined;
+      return undefined
     }
 
     // External provider requires transport configuration
@@ -92,9 +96,9 @@ export function getTransportConfig(identity: ServerIdentity): TransportConfig | 
       throw new McpError(
         ErrorCode.InvalidParams,
         "External providers require transport configuration"
-      );
+      )
     }
   }
 
-  return identity.transport;
+  return identity.transport
 }

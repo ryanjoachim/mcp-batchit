@@ -9,9 +9,15 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { WebSocketClientTransport } from "@modelcontextprotocol/sdk/client/websocket.js"
 
 // Internal imports - utils
-import { validateTransport, getTransportConfig } from "./utils/transportValidation.js"
+import {
+  validateTransport,
+  getTransportConfig,
+} from "./utils/transportValidation.js"
 import { withRecovery } from "./utils/recovery.js"
-import { formatBatchResults, formatErrorResponse } from "./utils/responseFormat.js"
+import {
+  formatBatchResults,
+  formatErrorResponse,
+} from "./utils/responseFormat.js"
 
 // Internal imports - providers
 import { createProvider } from "./providers/factory.js"
@@ -24,9 +30,8 @@ import {
   Operation,
   OperationResult,
   isHPCErrorResponse,
-  HPCErrorResponse
+  HPCErrorResponse,
 } from "./types/schemas/index.js"
-
 
 // Internal imports - connections
 import {
@@ -34,7 +39,7 @@ import {
   createTransportConnection,
   createProviderConnection,
   isTransportConnection,
-  isProviderConnection
+  isProviderConnection,
 } from "./types/connections.js"
 import { resultsCache } from "./utils/resultsCache.js"
 
@@ -63,49 +68,48 @@ class ConnectionManager {
     }
 
     // For internal provider, don't create transport connection
-    if (identity.serverType.type === "filesystem" &&
-        identity.serverType.config.provider === "batchit-internal") {
-
+    if (
+      identity.serverType.type === "filesystem" &&
+      identity.serverType.config.provider === "batchit-internal"
+    ) {
       const provider = createProvider(
         "batchit-internal",
         identity.serverType.config.rootDirectory || process.cwd()
-      );
+      )
 
-      const connection = createProviderConnection(provider, identity);
-      this.connections.set(serverKey, connection);
-      return connection;
+      const connection = createProviderConnection(provider, identity)
+      this.connections.set(serverKey, connection)
+      return connection
     }
 
     // For external providers, create transport as before
-    const transportConfig = getTransportConfig(identity);
+    const transportConfig = getTransportConfig(identity)
     if (!transportConfig) {
       throw new McpError(
         ErrorCode.InvalidParams,
         "Transport configuration required for external providers"
-      );
+      )
     }
 
     // Create transport with recovery
-    const transport = await withRecovery(
-      () => this.createTransport(transportConfig)
-    );
+    const transport = await withRecovery(() =>
+      this.createTransport(transportConfig)
+    )
 
     const client = new Client(
-      { name: "mcp-batchit", version: "1.1.0" },
+      { name: "mcp-batchit", version: "1.2.1" },
       { capabilities: {} }
-    );
+    )
 
     // Connect client with recovery
-    await withRecovery(
-      () => client.connect(transport)
-    );
+    await withRecovery(() => client.connect(transport))
 
-    const connection = createTransportConnection(client, transport, identity);
-    this.connections.set(serverKey, connection);
-    this.setupMonitoring(serverKey, connection);
-    this.setupCleanupInterval(serverKey);
+    const connection = createTransportConnection(client, transport, identity)
+    this.connections.set(serverKey, connection)
+    this.setupMonitoring(serverKey, connection)
+    this.setupCleanupInterval(serverKey)
 
-    return connection;
+    return connection
   }
 
   private async createTransport(
@@ -114,46 +118,46 @@ class ConnectionManager {
     switch (config.type) {
       case "stdio": {
         try {
-          validateTransport(config);
+          validateTransport(config)
 
           const transport = new StdioClientTransport({
             command: config.command,
             args: config.args,
             env: config.env,
             stderr: "pipe",
-          });
+          })
 
-          return transport;
+          return transport
         } catch (error) {
           if (error instanceof McpError) {
-            throw error;
+            throw error
           }
           throw new McpError(
             ErrorCode.InvalidParams,
             error instanceof Error ? error.message : String(error)
-          );
+          )
         }
       }
 
       case "websocket": {
         try {
-          validateTransport(config);
+          validateTransport(config)
 
           const wsUrl =
             config.url.startsWith("ws://") || config.url.startsWith("wss://")
               ? config.url
-              : `ws://${config.url}`;
+              : `ws://${config.url}`
 
-          const transport = new WebSocketClientTransport(new URL(wsUrl));
-          return transport;
+          const transport = new WebSocketClientTransport(new URL(wsUrl))
+          return transport
         } catch (error) {
           if (error instanceof McpError) {
-            throw error;
+            throw error
           }
           throw new McpError(
             ErrorCode.InvalidParams,
             error instanceof Error ? error.message : String(error)
-          );
+          )
         }
       }
     }
@@ -166,7 +170,7 @@ class ConnectionManager {
     if (isTransportConnection(connection)) {
       if (connection.transport instanceof StdioClientTransport) {
         // For stdio transports, we can monitor stderr
-        const stderr = connection.transport.stderr;
+        const stderr = connection.transport.stderr
         if (stderr) {
           stderr.on("data", (data: Buffer) => {
             console.error(`[${connection.identity.name}] ${data.toString()}`)
@@ -239,9 +243,8 @@ class BatchExecutor {
       keepAlive?: boolean
     }
   ): Promise<OperationResult[]> {
-    const connection = await this.connectionManager.getOrCreateConnection(
-      identity
-    )
+    const connection =
+      await this.connectionManager.getOrCreateConnection(identity)
 
     const results: OperationResult[] = []
     const pending = [...operations]
@@ -311,23 +314,29 @@ class BatchExecutor {
   ): Promise<OperationResult> {
     const start = Date.now()
     try {
-      let result: unknown;
+      let result: unknown
 
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(
-          () => reject(new McpError(ErrorCode.RequestTimeout, "Operation timed out")),
+          () =>
+            reject(
+              new McpError(ErrorCode.RequestTimeout, "Operation timed out")
+            ),
           timeoutMs
         )
-      );
+      )
 
       if (isProviderConnection(connection)) {
         // Use provider for execution with recovery
         result = await withRecovery(async () => {
           return Promise.race([
-            connection.provider.executeTool(operation.tool, operation.arguments),
-            timeoutPromise
-          ]);
-        });
+            connection.provider.executeTool(
+              operation.tool,
+              operation.arguments
+            ),
+            timeoutPromise,
+          ])
+        })
       } else {
         // Use transport-based execution with recovery
         result = await withRecovery(async () => {
@@ -336,9 +345,9 @@ class BatchExecutor {
               name: operation.tool,
               arguments: operation.arguments,
             }),
-            timeoutPromise
-          ]);
-        });
+            timeoutPromise,
+          ])
+        })
       }
 
       if (isHPCErrorResponse(result)) {
@@ -355,14 +364,16 @@ class BatchExecutor {
         success: true,
         result,
         durationMs: Date.now() - start,
-      };
-
-      if (operation.id) {
-        resultsCache.storeResult(operation.id, result);
-        console.log(`Stored result for operation ${operation.id}: ${JSON.stringify(result)}`);
       }
 
-      return operationResult;
+      if (operation.id) {
+        resultsCache.storeResult(operation.id, result)
+        console.log(
+          `Stored result for operation ${operation.id}: ${JSON.stringify(result)}`
+        )
+      }
+
+      return operationResult
     } catch (error) {
       return {
         tool: operation.tool,
@@ -379,12 +390,12 @@ const connectionManager = new ConnectionManager()
 const batchExecutor = new BatchExecutor(connectionManager)
 const server = new McpServer({
   name: "mcp-batchit",
-  version: "1.1.0",
+  version: "1.2.1",
   capabilities: {
     tools: {
-      batch_execute: true
-    }
-  }
+      batch_execute: true,
+    },
+  },
 })
 server.tool(
   "batch_execute",
@@ -404,7 +415,8 @@ Server Types:
    - stdio: Local external servers
    - websocket: Remote server connections
 
-Result Chaining Example:
+File Operations:
+1. Base Configuration:
 \`\`\`json
 {
   "targetServer": {
@@ -412,17 +424,78 @@ Result Chaining Example:
     "serverType": {
       "type": "filesystem",
       "config": {
-        "rootDirectory": "c:/Users/Chewy/workspace",
+        "rootDirectory": "c:/Users/User/workspace",
         "provider": "batchit-internal"
       }
     }
-  },
+  }
+}
+\`\`\`
+
+2. Write vs Update Operations (using above targetServer):
+\`\`\`json
+{
+  "operations": [
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "c:/Users/User/workspace/config.json",
+        "content": {
+          "version": "1.0.0",
+          "debug": true
+        }
+      }
+    },
+    {
+      "tool": "update_file",
+      "arguments": {
+        "path": "c:/Users/User/workspace/config.json",
+        "operation": {
+          "mode": "overwrite",
+          "content": "{\\"version\\": \\"2.0.0\\", \\"debug\\": false}",
+          "trackOptions": { "enabled": true }
+        }
+      }
+    },
+    {
+      "tool": "update_file",
+      "arguments": {
+        "path": "c:/Users/User/workspace/log.txt",
+        "operation": {
+          "mode": "append",
+          "content": "New log entry\\n"
+        }
+      }
+    },
+    {
+      "tool": "update_file",
+      "arguments": {
+        "path": "c:/Users/User/workspace/settings.json",
+        "operation": {
+          "mode": "diff",
+          "operations": [
+            {
+              "line": 2,
+              "operation": "replace",
+              "text": "  \\"apiEndpoint\\": \\"https://api.example.com\\""
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
+\`\`\`
+
+3. Result Chaining:
+\`\`\`json
+{
   "operations": [
     {
       "tool": "write_file",
       "id": "write1",
       "arguments": {
-        "path": "c:/Users/Chewy/workspace/data.json",
+        "path": "c:/Users/User/workspace/data.json",
         "content": { "key": "value" }
       }
     },
@@ -430,14 +503,14 @@ Result Chaining Example:
       "tool": "read_file",
       "id": "read1",
       "arguments": {
-        "path": "c:/Users/Chewy/workspace/data.json"
+        "path": "c:/Users/User/workspace/data.json"
       },
       "dependsOn": "write1"
     },
     {
       "tool": "write_file",
       "arguments": {
-        "path": "c:/Users/Chewy/workspace/backup.json",
+        "path": "c:/Users/User/workspace/backup.json",
         "content": "\${results.read1}"
       },
       "dependsOn": "read1"
@@ -461,7 +534,7 @@ Transport Examples:
     "transport": {
       "type": "stdio",
       "command": "node",
-      "args": ["c:/Users/Chewy/servers/filesystem/server.js"]
+      "args": ["c:/Users/User/servers/filesystem/server.js"]
     }
   }
 }
@@ -488,7 +561,7 @@ Requirements:
 
       const { targetServer, operations, options } = parsed.data
 
-      const results = await batchExecutor.executeBatch( // Use batchExecutor directly
+      const results = await batchExecutor.executeBatch(
         targetServer,
         operations,
         options
@@ -502,33 +575,38 @@ Requirements:
 )
 
 // Expose batch operations as a resource
-server.resource(
-  "batch",
-  "batch://operations",
-  async (uri) => ({
-    contents: [{
+server.resource("batch", "batch://operations", async (uri) => ({
+  contents: [
+    {
       uri: uri.href,
-      text: JSON.stringify({
-        operations: [{
-          name: "batch_execute",
-          description: "Execute operations in batch",
-          schema: BatchExecuteToolSchema,
-          capabilities: {
-            resultChaining: true,
-            atomicExecution: true,
-            concurrentProcessing: true
-          }
-        }],
-        serverTypes: {
-          filesystem: {
-            internal: "Optimized local filesystem provider with direct access",
-            external: "External MCP filesystem servers"
-          }
-        }
-      }, null, 2)
-    }]
-  })
-)
+      text: JSON.stringify(
+        {
+          operations: [
+            {
+              name: "batch_execute",
+              description: "Execute operations in batch",
+              schema: BatchExecuteToolSchema,
+              capabilities: {
+                resultChaining: true,
+                atomicExecution: true,
+                concurrentProcessing: true,
+              },
+            },
+          ],
+          serverTypes: {
+            filesystem: {
+              internal:
+                "Optimized local filesystem provider with direct access",
+              external: "External MCP servers",
+            },
+          },
+        },
+        null,
+        2
+      ),
+    },
+  ],
+}))
 
 // Startup
 ;(async function main() {
