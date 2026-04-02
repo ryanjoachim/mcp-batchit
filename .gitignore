@@ -21,6 +21,7 @@ dist/
 .docs/
 docs/
 memory-bank/
+Claude.md
 
 # Logs
 logs/
