@@ -10,8 +10,9 @@ import path from "path"
 import { isBinaryFile } from "isbinaryfile"
 import { FileSystem } from "./FileSystem.js"
 import { getMimeType } from "./fileTypeHandlers.js"
-import { compareFiles } from "./lineDiff.js"
 import { previewCache } from "./previewCache.js"
+import { generateDiff } from "./diffGenerator.js"
+import { collectMetadata } from "./metadataCollector.js"
 import {
   ContentModification,
   ContentTrackingOptions,
@@ -36,6 +37,9 @@ export async function trackContentModification(
     trackType: options.trackType,
     trackDiff: options.trackDiff,
     diffContextLines: options.diffContextLines,
+    diffOptions: options.diffOptions,
+    metadata: options.metadata,
+    compression: options.compression,
   }
   try {
     const normalized = path.normalize(filePath)
@@ -102,29 +106,38 @@ export async function trackContentModification(
         }
       }
 
-      // Track diff if requested and this is an update
-      if (trackingOptions.trackDiff && operation === "update" && oldContent) {
-        // Create temporary file for old content
-        const tmpOld = path.join(
-          path.dirname(normalized),
-          `.tmp_old_${Date.now()}`
-        )
+      // Collect extended metadata if requested
+      if (trackingOptions.metadata) {
         try {
-          await fileSystem.writeFile(tmpOld, oldContent)
-          const { diff } = await compareFiles(
-            tmpOld,
-            normalized,
-            rootDirectory,
-            {
-              contextLines: trackingOptions.diffContextLines,
+          modification.metadata = await collectMetadata(normalized, trackingOptions.metadata)
+        } catch {
+          // Ignore metadata collection errors - non-critical
+        }
+      }
+
+      // Track diff if requested and this is an update
+      if (trackingOptions.trackDiff && operation === "update" && oldContent !== undefined) {
+        // Read the new content from file
+        const newContent = await fileSystem.readFile(normalized, { checkBinary: false })
+
+        // Generate diff in-memory (no temp files)
+        const diffResult = await generateDiff(oldContent, newContent, {
+          contextLines: trackingOptions.diffContextLines,
+          ...trackingOptions.diffOptions,
+          compress: trackingOptions.compression?.enabled ?? trackingOptions.diffOptions?.compress,
+          compressionLevel: trackingOptions.compression?.level ?? trackingOptions.diffOptions?.compressionLevel,
+        })
+
+        if (!diffResult.identical) {
+          modification.diff = diffResult.diff
+          modification.diffCompressed = diffResult.compressed
+
+          if (diffResult.additions !== undefined) {
+            modification.diffStats = {
+              additions: diffResult.additions,
+              deletions: diffResult.deletions ?? 0,
+              linesChanged: diffResult.linesChanged ?? 0,
             }
-          )
-          modification.diff = diff
-        } finally {
-          try {
-            await fileSystem.deleteFile(tmpOld)
-          } catch {
-            // Ignore cleanup errors
           }
         }
       }
@@ -161,6 +174,9 @@ export async function trackContentModifications(
     trackType: options.trackType,
     trackDiff: options.trackDiff,
     diffContextLines: options.diffContextLines,
+    diffOptions: options.diffOptions,
+    metadata: options.metadata,
+    compression: options.compression,
   }
   const results: ContentModification[] = []
   const maxConcurrent = 5
