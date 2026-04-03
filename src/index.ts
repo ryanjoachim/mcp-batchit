@@ -18,6 +18,8 @@ import {
   formatBatchResults,
   formatErrorResponse,
 } from "./utils/responseFormat.js"
+import { createOrderedBatches } from "./utils/dependencyOrder.js"
+import { getErrorMessageFromHpcResponse } from "./utils/errorMapper.js"
 
 // Internal imports - providers
 import { createProvider } from "./providers/factory.js"
@@ -30,7 +32,6 @@ import {
   Operation,
   OperationResult,
   isHPCErrorResponse,
-  HPCErrorResponse,
 } from "./types/schemas/index.js"
 
 // Internal imports - connections
@@ -42,6 +43,8 @@ import {
   isProviderConnection,
 } from "./types/connections.js"
 import { resultsCache } from "./utils/resultsCache.js"
+
+const VERSION = "1.2.1"
 
 // Connection Management
 class ConnectionManager {
@@ -97,7 +100,7 @@ class ConnectionManager {
     )
 
     const client = new Client(
-      { name: "mcp-batchit", version: "1.2.1" },
+      { name: "mcp-batchit", version: VERSION },
       { capabilities: {} }
     )
 
@@ -115,51 +118,41 @@ class ConnectionManager {
   private async createTransport(
     config: TransportConfig
   ): Promise<WebSocketClientTransport | StdioClientTransport> {
-    switch (config.type) {
-      case "stdio": {
-        try {
-          validateTransport(config)
+    try {
+      validateTransport(config)
 
-          const transport = new StdioClientTransport({
+      switch (config.type) {
+        case "stdio": {
+          return new StdioClientTransport({
             command: config.command,
             args: config.args,
             env: config.env,
             stderr: "pipe",
           })
-
-          return transport
-        } catch (error) {
-          if (error instanceof McpError) {
-            throw error
-          }
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            error instanceof Error ? error.message : String(error)
-          )
         }
-      }
 
-      case "websocket": {
-        try {
-          validateTransport(config)
-
+        case "websocket": {
           const wsUrl =
             config.url.startsWith("ws://") || config.url.startsWith("wss://")
               ? config.url
               : `ws://${config.url}`
+          return new WebSocketClientTransport(new URL(wsUrl))
+        }
 
-          const transport = new WebSocketClientTransport(new URL(wsUrl))
-          return transport
-        } catch (error) {
-          if (error instanceof McpError) {
-            throw error
-          }
+        default:
           throw new McpError(
             ErrorCode.InvalidParams,
-            error instanceof Error ? error.message : String(error)
+            `Unsupported transport type: ${(config as { type: string }).type}`
           )
-        }
       }
+    } catch (error) {
+      if (error instanceof McpError) {
+        throw error
+      }
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        error instanceof Error ? error.message : String(error)
+      )
     }
   }
 
@@ -198,6 +191,7 @@ class ConnectionManager {
       }
     }, 60000) // Check every minute
 
+    interval.unref() // Don't prevent the process from exiting when idle
     this.cleanupIntervals.set(serverKey, interval)
   }
 
@@ -224,14 +218,14 @@ class ConnectionManager {
   }
 
   async closeAll(): Promise<void> {
-    for (const serverKey of this.connections.keys()) {
-      await this.closeConnection(serverKey)
-    }
+    await Promise.all(
+      [...this.connections.keys()].map((key) => this.closeConnection(key))
+    )
   }
 }
 
 class BatchExecutor {
-  constructor(private connectionManager: ConnectionManager) {}
+  constructor(private connectionManager: ConnectionManager) { }
 
   async executeBatch(
     identity: ServerIdentity,
@@ -241,37 +235,39 @@ class BatchExecutor {
       timeoutMs: number
       stopOnError: boolean
       keepAlive?: boolean
+    },
+    context?: {
+      signal?: AbortSignal
+      onProgress?: (completed: number, total: number) => Promise<void>
     }
   ): Promise<OperationResult[]> {
     const connection =
       await this.connectionManager.getOrCreateConnection(identity)
 
     const results: OperationResult[] = []
-    const pending = [...operations]
-    const running = new Set<Promise<OperationResult>>()
+    const batches = createOrderedBatches(operations)
 
     try {
-      while (pending.length > 0 || running.size > 0) {
-        while (pending.length > 0 && running.size < options.maxConcurrent) {
-          const op = pending.shift()!
-          const promise = this.executeOperation(
-            connection,
-            op,
-            options.timeoutMs
-          )
-          running.add(promise)
-
-          promise.then((res) => {
-            running.delete(promise)
-            results.push(res)
-            if (!res.success && options.stopOnError) {
-              pending.length = 0
-            }
-          })
+      for (const batch of batches) {
+        // Respect cancellation between batch layers
+        if (context?.signal?.aborted) {
+          break
         }
 
-        if (running.size > 0) {
-          await Promise.race(running)
+        const batchResults = await Promise.all(
+          batch.map((op) =>
+            this.executeOperation(connection, op, options.timeoutMs, context?.signal)
+          )
+        )
+        results.push(...batchResults)
+
+        // Emit progress after each completed layer
+        if (context?.onProgress) {
+          await context.onProgress(results.length, operations.length)
+        }
+
+        if (options.stopOnError && batchResults.some((r) => !r.success)) {
+          break
         }
       }
     } finally {
@@ -285,76 +281,83 @@ class BatchExecutor {
     return results
   }
 
-  private getErrorMessage(result: HPCErrorResponse): string {
-    // Direct error/message properties
-    if (result.error || result.message) {
-      return result.error ?? result.message ?? "Unknown HPC error"
-    }
-
-    // Look for error in content array
-    if (result.content?.length) {
-      const textContent = result.content
-        .filter((item) => item.type === "text" && item.text)
-        .map((item) => item.text)
-        .filter((text): text is string => text !== undefined)
-        .join(" ")
-
-      if (textContent) {
-        return textContent
-      }
-    }
-
-    return "Unknown HPC error"
-  }
-
   private async executeOperation(
     connection: ServerConnection,
     operation: Operation,
-    timeoutMs: number
+    timeoutMs: number,
+    signal?: AbortSignal
   ): Promise<OperationResult> {
     const start = Date.now()
+
+    // Fast-path: already cancelled before we even start
+    if (signal?.aborted) {
+      return {
+        tool: operation.tool,
+        success: false,
+        error: "Operation cancelled",
+        durationMs: 0,
+      }
+    }
+
     try {
       let result: unknown
 
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(
-          () =>
-            reject(
-              new McpError(ErrorCode.RequestTimeout, "Operation timed out")
-            ),
+      // Build race targets: timeout + optional cancellation signal
+      let timeoutHandle: NodeJS.Timeout
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new McpError(ErrorCode.RequestTimeout, "Operation timed out")),
           timeoutMs
         )
-      )
+      })
 
-      if (isProviderConnection(connection)) {
-        // Use provider for execution with recovery
-        result = await withRecovery(async () => {
-          return Promise.race([
-            connection.provider.executeTool(
-              operation.tool,
-              operation.arguments
-            ),
-            timeoutPromise,
-          ])
+      const abortPromise = signal
+        ? new Promise<never>((_, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new Error("Operation cancelled")),
+            { once: true }
+          )
         })
-      } else {
-        // Use transport-based execution with recovery
-        result = await withRecovery(async () => {
-          return Promise.race([
-            connection.client.callTool({
-              name: operation.tool,
-              arguments: operation.arguments,
-            }),
-            timeoutPromise,
-          ])
-        })
+        : null
+
+      const raceTargets: Promise<never>[] = abortPromise
+        ? [timeoutPromise, abortPromise]
+        : [timeoutPromise]
+
+      try {
+        if (isProviderConnection(connection)) {
+          // Use provider for execution with recovery
+          result = await withRecovery(async () => {
+            return Promise.race([
+              connection.provider.executeTool(
+                operation.tool,
+                operation.arguments
+              ),
+              ...raceTargets,
+            ])
+          })
+        } else {
+          // Use transport-based execution with recovery
+          result = await withRecovery(async () => {
+            return Promise.race([
+              connection.client.callTool({
+                name: operation.tool,
+                arguments: operation.arguments,
+              }),
+              ...raceTargets,
+            ])
+          })
+        }
+      } finally {
+        clearTimeout(timeoutHandle!) // Always clear to prevent handle leak
       }
 
       if (isHPCErrorResponse(result)) {
         return {
           tool: operation.tool,
           success: false,
-          error: this.getErrorMessage(result),
+          error: getErrorMessageFromHpcResponse(result),
           durationMs: Date.now() - start,
         }
       }
@@ -368,9 +371,6 @@ class BatchExecutor {
 
       if (operation.id) {
         resultsCache.storeResult(operation.id, result)
-        console.log(
-          `Stored result for operation ${operation.id}: ${JSON.stringify(result)}`
-        )
       }
 
       return operationResult
@@ -390,169 +390,43 @@ const connectionManager = new ConnectionManager()
 const batchExecutor = new BatchExecutor(connectionManager)
 const server = new McpServer({
   name: "mcp-batchit",
-  version: "1.2.1",
+  version: VERSION,
+  // description is surfaced to clients during the initialize handshake, giving them
+  // a usage guide without consuming tool description tokens on every tools/list call.
+  description: `mcp-batchit executes multiple MCP tool calls in a single batch request with dependency ordering and result chaining.
+
+Supports two server types:
+- batchit-internal: Optimised local filesystem provider (write_file, update_file, read_file, etc.)
+- External MCP servers via stdio or websocket transport
+
+Key features:
+- Result chaining: reference prior operation output using \${results.<operationId>} in arguments
+- Dependency ordering: set dependsOn on an operation to ensure it runs after its dependency
+- Concurrent execution: independent operations within a layer run in parallel up to maxConcurrent
+- Error recovery: transient failures are automatically retried via withRecovery
+
+Options (all optional):
+- maxConcurrent (default 5): max parallel operations per dependency layer
+- timeoutMs (default 30000): per-operation timeout in milliseconds
+- stopOnError (default false): halt the batch on the first failure
+- keepAlive (default false): keep the target server connection open after the batch
+
+All file paths must be absolute.`,
   capabilities: {
-    tools: {
-      batch_execute: true,
-    },
+    // tools.listChanged: false — this server exposes a fixed tool set
+    tools: { listChanged: false },
+    resources: {},
   },
 })
-server.tool(
+// tool() expects ZodRawShapeCompat (the raw shape), not a full ZodObject.
+// Using .shape unwraps the ZodObject so the SDK can infer args types correctly,
+// and ensures the call resolves to the right overload — which returns RegisteredTool.
+const batchTool = server.tool(
   "batch_execute",
-  `Execute operations in batch on an MCP server. Supports internal filesystem operations ("provider": "batchit-internal") and external MCP servers (stdio or websocket transport).
-
-Capabilities:
-1. Result Chaining: Reference operation results using \${results.operationId} syntax
-2. Atomic Execution: Operations execute as single unit with proper rollback
-3. Concurrent Processing: Independent operations run in parallel (maxConcurrent)
-4. Type-Safe: Full TypeScript support with result type preservation
-5. Error Recovery: Automatic retry for transient failures
-
-Server Types:
-1. Internal Filesystem (batchit-internal):
-   Optimized local filesystem provider with direct access
-2. External MCP:
-   - stdio: Local external servers
-   - websocket: Remote server connections
-
-File Operations:
-1. Base Configuration:
-\`\`\`json
-{
-  "targetServer": {
-    "name": "local-fs",
-    "serverType": {
-      "type": "filesystem",
-      "config": {
-        "rootDirectory": "c:/Users/User/workspace",
-        "provider": "batchit-internal"
-      }
-    }
-  }
-}
-\`\`\`
-
-2. Write vs Update Operations (using above targetServer):
-\`\`\`json
-{
-  "operations": [
-    {
-      "tool": "write_file",
-      "arguments": {
-        "path": "c:/Users/User/workspace/config.json",
-        "content": {
-          "version": "1.0.0",
-          "debug": true
-        }
-      }
-    },
-    {
-      "tool": "update_file",
-      "arguments": {
-        "path": "c:/Users/User/workspace/config.json",
-        "operation": {
-          "mode": "overwrite",
-          "content": "{\\"version\\": \\"2.0.0\\", \\"debug\\": false}",
-          "trackOptions": { "enabled": true }
-        }
-      }
-    },
-    {
-      "tool": "update_file",
-      "arguments": {
-        "path": "c:/Users/User/workspace/log.txt",
-        "operation": {
-          "mode": "append",
-          "content": "New log entry\\n"
-        }
-      }
-    },
-    {
-      "tool": "update_file",
-      "arguments": {
-        "path": "c:/Users/User/workspace/settings.json",
-        "operation": {
-          "mode": "diff",
-          "operations": [
-            {
-              "line": 2,
-              "operation": "replace",
-              "text": "  \\"apiEndpoint\\": \\"https://api.example.com\\""
-            }
-          ]
-        }
-      }
-    }
-  ]
-}
-\`\`\`
-
-3. Result Chaining:
-\`\`\`json
-{
-  "operations": [
-    {
-      "tool": "write_file",
-      "id": "write1",
-      "arguments": {
-        "path": "c:/Users/User/workspace/data.json",
-        "content": { "key": "value" }
-      }
-    },
-    {
-      "tool": "read_file",
-      "id": "read1",
-      "arguments": {
-        "path": "c:/Users/User/workspace/data.json"
-      },
-      "dependsOn": "write1"
-    },
-    {
-      "tool": "write_file",
-      "arguments": {
-        "path": "c:/Users/User/workspace/backup.json",
-        "content": "\${results.read1}"
-      },
-      "dependsOn": "read1"
-    }
-  ],
-  "options": {
-    "maxConcurrent": 2,
-    "timeoutMs": 5000,
-    "stopOnError": true
-  }
-}
-\`\`\`
-
-Transport Examples:
-1. Stdio Transport:
-\`\`\`json
-{
-  "targetServer": {
-    "name": "external-fs",
-    "serverType": { "type": "filesystem" },
-    "transport": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["c:/Users/User/servers/filesystem/server.js"]
-    }
-  }
-}
-\`\`\`
-
-
-Options:
-- maxConcurrent: Parallel operations (default: 5)
-- timeoutMs: Operation timeout (default: 30000)
-- stopOnError: Halt on failure (default: false)
-- keepAlive: Maintain connection (default: false)
-
-Requirements:
-- Absolute paths required
-- Operation IDs needed for dependencies
-- Provider matches serverType`,
+  // Concise behavioural description — examples and full usage live in server description.
+  `Execute one or more operations in batch on a target MCP server. Supports internal filesystem operations (provider: "batchit-internal") and external MCP servers (stdio or websocket). Operations may declare dependsOn to form a dependency graph; independent operations within each layer run concurrently. Reference prior results with \${results.<id>} syntax. Supports cancellation via the MCP notifications/cancelled notification.`,
   BatchExecuteToolSchema,
-  async (args) => {
+  async (args, extra) => {
     try {
       const parsed = BatchArgsSchema.safeParse(args)
       if (!parsed.success) {
@@ -561,55 +435,116 @@ Requirements:
 
       const { targetServer, operations, options } = parsed.data
 
+      // extra.signal is aborted by the SDK when the client sends notifications/cancelled.
+      // NOTE: Progress notifications (notifications/progress) require RequestHandlerExtra
+      // to expose _meta.progressToken and sendNotification(), neither of which are
+      // present in this SDK version. The onProgress hook in executeBatch is wired up
+      // and ready — upgrade the SDK to enable it here.
       const results = await batchExecutor.executeBatch(
         targetServer,
         operations,
-        options
+        options,
+        {
+          signal: extra.signal,
+        }
       )
 
-      return formatBatchResults(results, targetServer.name)
+      // structuredContent lets clients consume results programmatically (spec 2025-06-18+).
+      // The text content field is retained for backwards-compatible display.
+      const structuredContent = {
+        serverName: targetServer.name,
+        totalOperations: operations.length,
+        succeeded: results.filter((r) => r.success).length,
+        failed: results.filter((r) => !r.success).length,
+        results: results.map(({ tool, success, result, error, durationMs }) => ({
+          tool,
+          success,
+          ...(result !== undefined && { result }),
+          ...(error !== undefined && { error }),
+          durationMs,
+        })),
+      }
+
+      return {
+        ...formatBatchResults(results, targetServer.name),
+        structuredContent,
+      }
     } catch (error) {
       return formatErrorResponse(error)
     }
   }
 )
 
-// Expose batch operations as a resource
-server.resource("batch", "batch://operations", async (uri) => ({
-  contents: [
-    {
-      uri: uri.href,
-      text: JSON.stringify(
-        {
-          operations: [
-            {
-              name: "batch_execute",
-              description: "Execute operations in batch",
-              schema: BatchExecuteToolSchema,
-              capabilities: {
-                resultChaining: true,
-                atomicExecution: true,
-                concurrentProcessing: true,
+// Set annotations on the registered tool. tool() now correctly returns RegisteredTool
+// (the .shape fix above resolved the overload), so .update() is available.
+// Clients SHOULD surface these hints to users before invoking.
+batchTool.update({
+  annotations: {
+    destructiveHint: true,   // batch can write, overwrite, or delete files
+    openWorldHint: true,     // connects to arbitrary external MCP servers
+    idempotentHint: false,   // repeated calls produce different side-effects
+  },
+})
+
+// Expose the batch_execute output schema as a readable resource.
+// Resources are for data clients can inspect — a hand-written JSON Schema is
+// far more useful here than serialising a Zod object (which emits internal metadata).
+server.resource(
+  "batch-output-schema",
+  "batch://output-schema",
+  { mimeType: "application/schema+json" },
+  async (uri) => ({
+    contents: [
+      {
+        uri: uri.href,
+        mimeType: "application/schema+json",
+        text: JSON.stringify(
+          {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            title: "batch_execute structuredContent output",
+            type: "object",
+            required: ["serverName", "totalOperations", "succeeded", "failed", "results"],
+            properties: {
+              serverName: {
+                type: "string",
+                description: "Name of the target server the batch ran against",
+              },
+              totalOperations: { type: "number" },
+              succeeded: { type: "number" },
+              failed: { type: "number" },
+              results: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: ["tool", "success", "durationMs"],
+                  properties: {
+                    tool: { type: "string", description: "Tool name that was invoked" },
+                    success: { type: "boolean" },
+                    result: { description: "Tool output — present on success, shape depends on the target tool" },
+                    error: { type: "string", description: "Error message — present on failure" },
+                    durationMs: { type: "number", description: "Wall-clock time for this operation" },
+                  },
+                },
               },
             },
-          ],
-          serverTypes: {
-            filesystem: {
-              internal:
-                "Optimized local filesystem provider with direct access",
-              external: "External MCP servers",
-            },
           },
-        },
-        null,
-        2
-      ),
-    },
-  ],
-}))
+          null,
+          2
+        ),
+      },
+    ],
+  })
+)
 
 // Startup
-;(async function main() {
+async function cleanup() {
+  console.error("Shutting down, closing all connections...")
+  await connectionManager.closeAll()
+  await server.close()
+  process.exit(0)
+}
+
+async function main() {
   const transport = new StdioServerTransport()
   await server.connect(transport)
 
@@ -617,14 +552,9 @@ server.resource("batch", "batch://operations", async (uri) => ({
 
   process.on("SIGINT", cleanup)
   process.on("SIGTERM", cleanup)
-})().catch((err) => {
+}
+
+main().catch((err) => {
   console.error("Fatal error in aggregator server:", err)
   process.exit(1)
 })
-
-async function cleanup() {
-  console.error("Shutting down, closing all connections...")
-  await connectionManager.closeAll()
-  await server.close()
-  process.exit(0)
-}

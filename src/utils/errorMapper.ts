@@ -194,3 +194,32 @@ export function mapToMcpError(error: unknown): McpError {
     context
   )
 }
+
+/**
+ * Extracts a human-readable error message from an HPCErrorResponse
+ */
+export function getErrorMessageFromHpcResponse(result: {
+  error?: string
+  message?: string
+  content?: Array<{ type: string; text?: string }>
+}): string {
+  // Direct error/message properties
+  if (result.error || result.message) {
+    return result.error ?? result.message ?? "Unknown HPC error"
+  }
+
+  // Look for error in content array
+  if (result.content?.length) {
+    const textContent = result.content
+      .filter((item) => item.type === "text" && item.text)
+      .map((item) => item.text)
+      .filter((text): text is string => text !== undefined)
+      .join(" ")
+
+    if (textContent) {
+      return textContent
+    }
+  }
+
+  return "Unknown HPC error"
+}
