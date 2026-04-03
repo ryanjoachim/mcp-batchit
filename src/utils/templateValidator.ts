@@ -1,4 +1,4 @@
-import Handlebars from "handlebars"
+import { hbs } from "./handlebarsInstance.js"
 
 /**
  * Type of validation error
@@ -74,7 +74,7 @@ function findHelperCalls(template: string): string[] {
     if (content.startsWith(">") || content.startsWith("#")) continue
     // Extract helper name (first word)
     const firstWord = content.split(/\s+/)[0]
-    if (firstWord && !Handlebars.helpers[firstWord]) {
+    if (firstWord && !hbs.helpers[firstWord]) {
       helpers.add(firstWord)
     }
   }
@@ -93,7 +93,7 @@ function findPartialCalls(template: string): string[] {
 
   while ((match = partialPattern.exec(template)) !== null) {
     const partialName = match[1]
-    if (!Handlebars.partials[partialName]) {
+    if (!hbs.partials[partialName]) {
       partials.add(partialName)
     }
   }
@@ -118,8 +118,9 @@ export function validateTemplate(
   const checkPartials = options?.checkPartials ?? true
 
   // Step 1: Compile check (catches syntax errors)
+  let compiled: HandlebarsTemplateDelegate | undefined
   try {
-    Handlebars.compile(template)
+    compiled = hbs.compile(template)
   } catch (error) {
     if (error instanceof Error) {
       const location = extractLocation(error)
@@ -128,6 +129,23 @@ export function validateTemplate(
         line: location.line,
         column: location.column,
         type: "syntax",
+      })
+    }
+    return { valid: false, errors }
+  }
+
+  // Step 2: Execute to catch runtime errors (missing helpers, etc.)
+  // Use a safe context to avoid side effects
+  try {
+    compiled({})
+  } catch (error) {
+    if (error instanceof Error) {
+      const location = extractLocation(error)
+      errors.push({
+        message: error.message,
+        line: location.line,
+        column: location.column,
+        type: error.message.includes("partial") ? "partial" : error.message.includes("not found") ? "helper" : /Parse error|Expecting|Expected|parse error|syntax/i.test(error.message) ? "syntax" : "other",
       })
     }
     return { valid: false, errors }

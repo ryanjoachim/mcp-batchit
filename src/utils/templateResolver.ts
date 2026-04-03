@@ -1,11 +1,9 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
-import Handlebars from "handlebars"
 import { resultsCache } from "./resultsCache.js"
 import { TemplateCache } from "./templateCache.js"
 import { registerBuiltInHelpers, registerHelper, unregisterHelper, listHelpers } from "./templateHelpers.js"
 import { validateTemplate, type ValidationResult } from "./templateValidator.js"
-
-const hbs = Handlebars.create()
+import { hbs } from "./handlebarsInstance.js"
 
 /**
  * Cache of precompiled Handlebars templates for improved performance.
@@ -47,15 +45,10 @@ export function getTemplateCacheMetrics() {
   return templateCache.getMetrics()
 }
 
-// Configure strict mode for better error handling
-hbs.registerHelper("helperMissing", function () {
-  throw new Error(`Helper not found: ${arguments[arguments.length - 1].name}`)
-})
-
 // Register existing helpers only if not already present
 if (!hbs.helpers["json"]) {
   hbs.registerHelper("json", (context) => {
-    return new Handlebars.SafeString(JSON.stringify(context, null, 2))
+    return new hbs.SafeString(JSON.stringify(context, null, 2))
   })
 }
 if (!hbs.helpers["parseJson"]) {
@@ -72,7 +65,7 @@ if (!hbs.helpers["now"]) {
 }
 
 // Register all built-in helpers from templateHelpers
-registerBuiltInHelpers(hbs)
+registerBuiltInHelpers()
 
 // Re-export helpers API for external use
 export { registerHelper, unregisterHelper, listHelpers }

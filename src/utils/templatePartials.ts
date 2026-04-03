@@ -1,9 +1,4 @@
-import Handlebars from "handlebars"
-
-/**
- * Shared Handlebars instance for registering partials.
- */
-const hbs = Handlebars.create()
+import { hbs } from "./handlebarsInstance.js"
 
 /**
  * Registers a single partial template

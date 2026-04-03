@@ -1,13 +1,7 @@
+import { hbs } from "./handlebarsInstance.js"
 import Handlebars from "handlebars"
 
 type HelperDelegate = Handlebars.HelperDelegate
-
-/**
- * Shared Handlebars instance for registering custom helpers.
- * This instance is separate from the one used by templateResolver
- * to allow helpers to be registered independently.
- */
-const hbs = Handlebars.create()
 
 /**
  * Registers a single helper on the shared Handlebars instance
@@ -66,7 +60,6 @@ hbs.registerHelper("replace", (str: string, search: string, replacement: string)
 })
 
 hbs.registerHelper("concat", (...args: unknown[]) => {
-  // Last argument is options, exclude it
   args.pop()
   return args.join("")
 })
@@ -88,12 +81,12 @@ hbs.registerHelper("gt", (a: number, b: number) => a > b)
 hbs.registerHelper("gte", (a: number, b: number) => a >= b)
 
 hbs.registerHelper("and", (...args: unknown[]): boolean => {
-  args.pop() // remove HelperOptions
+  args.pop()
   return args.every(Boolean)
 })
 
 hbs.registerHelper("or", (...args: unknown[]): boolean => {
-  args.pop() // remove HelperOptions
+  args.pop()
   return args.some(Boolean)
 })
 
@@ -108,11 +101,10 @@ hbs.registerHelper("formatDate", (date: Date | string, format?: string): string 
 
   if (isNaN(d.getTime())) return ""
 
-  if (!format) {
+  if (!format || typeof format !== "string") {
     return d.toISOString()
   }
 
-  // Basic format tokens: YYYY, MM, DD, HH, mm, ss
   const tokens: Record<string, string> = {
     YYYY: d.getFullYear().toString(),
     MM: String(d.getMonth() + 1).padStart(2, "0"),
@@ -202,9 +194,7 @@ hbs.registerHelper("includes", (arr: unknown[], value: unknown): boolean => {
  * @param instance - Optional Handlebars instance to register helpers on.
  *                   If not provided, helpers are registered on the shared instance.
  */
-export function registerBuiltInHelpers(
-  instance?: typeof Handlebars
-): void {
+export function registerBuiltInHelpers(instance?: typeof Handlebars): void {
   const target = instance ?? hbs
 
   // String helpers
@@ -234,7 +224,7 @@ export function registerBuiltInHelpers(
     return str.split(search).join(replacement)
   })
   target.registerHelper("concat", (...args: unknown[]) => {
-    args.pop() // remove HelperOptions
+    args.pop()
     return args.join("")
   })
 
@@ -246,11 +236,11 @@ export function registerBuiltInHelpers(
   target.registerHelper("gt", (a: number, b: number) => a > b)
   target.registerHelper("gte", (a: number, b: number) => a >= b)
   target.registerHelper("and", (...args: unknown[]) => {
-    args.pop() // remove HelperOptions
+    args.pop()
     return args.every(Boolean)
   })
   target.registerHelper("or", (...args: unknown[]) => {
-    args.pop() // remove HelperOptions
+    args.pop()
     return args.some(Boolean)
   })
   target.registerHelper("not", (value: unknown) => !value)
@@ -259,7 +249,7 @@ export function registerBuiltInHelpers(
   target.registerHelper("formatDate", (date: Date | string, format?: string) => {
     const d = typeof date === "string" ? new Date(date) : date
     if (isNaN(d.getTime())) return ""
-    if (!format) return d.toISOString()
+    if (!format || typeof format !== "string") return d.toISOString()
     const tokens: Record<string, string> = {
       YYYY: d.getFullYear().toString(),
       MM: String(d.getMonth() + 1).padStart(2, "0"),
