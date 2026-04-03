@@ -1,25 +1,50 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
 import Handlebars from "handlebars"
 import { resultsCache } from "./resultsCache.js"
+import { TemplateCache } from "./templateCache.js"
+import { registerBuiltInHelpers, registerHelper, unregisterHelper, listHelpers } from "./templateHelpers.js"
+import { validateTemplate, type ValidationResult } from "./templateValidator.js"
 
-/**
- * Handlebars templating engine instance with registered helpers
- * for JSON manipulation and timestamp generation
- */
 const hbs = Handlebars.create()
 
 /**
  * Cache of precompiled Handlebars templates for improved performance.
- * Templates are compiled once and reused for subsequent operations.
+ * Uses LRU eviction with configurable max size.
  */
-const templateCache = new Map<string, HandlebarsTemplateDelegate>()
+const templateCache = new TemplateCache({ enableMetrics: true })
+
+/**
+ * Configuration for template resolution
+ */
+interface ResolveTemplatesConfig {
+  /** Validate template before execution (default: false) */
+  validateBeforeExecution?: boolean
+}
+
+let globalConfig: ResolveTemplatesConfig = {
+  validateBeforeExecution: false,
+}
+
+/**
+ * Configure template resolution behavior
+ */
+export function configureTemplateResolution(config: ResolveTemplatesConfig): void {
+  globalConfig = { ...globalConfig, ...config }
+}
 
 /**
  * Clears the template cache. Useful for testing or when templates
  * need to be recompiled (e.g., after template modifications).
  */
-export function clearTemplateCache() {
+export function clearTemplateCache(): void {
   templateCache.clear()
+}
+
+/**
+ * Get current cache metrics
+ */
+export function getTemplateCacheMetrics() {
+  return templateCache.getMetrics()
 }
 
 // Configure strict mode for better error handling
@@ -27,28 +52,70 @@ hbs.registerHelper("helperMissing", function () {
   throw new Error(`Helper not found: ${arguments[arguments.length - 1].name}`)
 })
 
-// Register basic helpers
-hbs.registerHelper("json", (context) => {
-  // Match project's JSON formatting pattern
-  return new Handlebars.SafeString(JSON.stringify(context, null, 2))
-})
-hbs.registerHelper("parseJson", (str) => {
-  try {
-    return JSON.parse(str)
-  } catch {
-    return {}
+// Register existing helpers only if not already present
+if (!hbs.helpers["json"]) {
+  hbs.registerHelper("json", (context) => {
+    return new Handlebars.SafeString(JSON.stringify(context, null, 2))
+  })
+}
+if (!hbs.helpers["parseJson"]) {
+  hbs.registerHelper("parseJson", (str) => {
+    try {
+      return JSON.parse(str)
+    } catch {
+      return {}
+    }
+  })
+}
+if (!hbs.helpers["now"]) {
+  hbs.registerHelper("now", () => new Date().toISOString())
+}
+
+// Register all built-in helpers from templateHelpers
+registerBuiltInHelpers(hbs)
+
+// Re-export helpers API for external use
+export { registerHelper, unregisterHelper, listHelpers }
+
+/**
+ * Enhances a template error with line number and snippet context
+ */
+export function enhanceTemplateError(
+  error: Error,
+  template: string
+): McpError {
+  const errorMessage = error.message
+
+  // Try to extract line number from error message
+  const lineMatch = errorMessage.match(/line (\d+)/)
+  const lineNumber = lineMatch ? parseInt(lineMatch[1], 10) : undefined
+
+  let enhancedMessage = `Template error: ${errorMessage}`
+
+  if (lineNumber !== undefined) {
+    enhancedMessage += `\n  at line ${lineNumber}`
+
+    // Try to show the problematic line
+    const lines = template.split("\n")
+    if (lineNumber >= 1 && lineNumber <= lines.length) {
+      const snippet = lines[lineNumber - 1]
+      enhancedMessage += `\n  ${snippet}`
+    }
   }
-})
-hbs.registerHelper("now", () => new Date().toISOString())
+
+  return new McpError(ErrorCode.InvalidParams, enhancedMessage)
+}
 
 /**
  * Resolves Handlebars templates in operation arguments.
  *
  * Features:
- * - Template caching for improved performance
+ * - Template caching for improved performance (LRU eviction)
  * - Access to previous operation results via {{results}}
  * - Current timestamp via {{now}}
  * - JSON manipulation via {{json}} and {{parseJson}} helpers
+ * - Built-in helpers: uppercase, lowercase, capitalize, trim, eq, ne, and, or, not, etc.
+ * - Optional template validation before execution
  *
  * @example
  * ```typescript
@@ -68,19 +135,32 @@ export function resolveTemplates(
 ): Record<string, any> {
   if (!args.template) return args
 
+  const templateStr = args.template
+
+  // Optional validation before execution
+  if (globalConfig.validateBeforeExecution) {
+    const validationResult: ValidationResult = validateTemplate(templateStr)
+    if (!validationResult.valid) {
+      const firstError = validationResult.errors[0]
+      const errorMessage = firstError.message + (firstError.line ? ` at line ${firstError.line}` : "")
+      throw new McpError(ErrorCode.InvalidParams, `Template validation error: ${errorMessage}`)
+    }
+  }
+
   // Try to get from cache first
-  let template = templateCache.get(args.template)
+  let template = templateCache.get(templateStr)
 
   if (!template) {
     try {
       // Compile the template
-      template = hbs.compile(args.template)
+      template = hbs.compile(templateStr)
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error)
+      if (error instanceof Error) {
+        throw enhanceTemplateError(error, templateStr)
+      }
       throw new McpError(
         ErrorCode.InvalidParams,
-        `Template compilation error: ${errorMessage}`
+        `Template compilation error: ${error instanceof Error ? error.message : String(error)}`
       )
     }
   }
@@ -98,12 +178,14 @@ export function resolveTemplates(
     // Execute the template
     renderedContent = template(context)
     // Only cache if execution succeeds
-    templateCache.set(args.template, template)
+    templateCache.set(templateStr, template)
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error)
+    if (error instanceof Error) {
+      throw enhanceTemplateError(error, templateStr)
+    }
     throw new McpError(
       ErrorCode.InvalidParams,
-      `Template runtime error: ${errorMessage}`
+      `Template runtime error: ${error instanceof Error ? error.message : String(error)}`
     )
   }
 
@@ -113,3 +195,6 @@ export function resolveTemplates(
     template: undefined,
   }
 }
+
+// Export validateTemplate for external use
+export { validateTemplate }
