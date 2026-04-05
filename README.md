@@ -48,20 +48,22 @@ The `batchit-internal` provider is designed for speed and rich metadata. It’s 
 | Tool | Capability | Unique "Superpowers" |
 | :--- | :--- | :--- |
 | `read_file` | Read text/binary | **OCR-like Extraction:** Automatically converts PDF and DOCX to clean text. Supports line numbering. |
-| `write_file` | Create/Overwrite | **Atomic Writing:** Supports Handlebars templates and **Content Tracking** (in-memory diffs, gzip compression, extended metadata, size stats, and MIME types). |
-| `edit_file` | Patching | **Search & Replace:** Apply precise line-based edits with `dryRun` support and visual diff generation. |
-| `search_files` | Search | **Contextual Grep:** Supports Glob/Regex with content previews and surrounding context lines. |
-| `directory_tree` | Visualization | Generates JSON or "tree-view" text structures with file sizes and modification dates. |
-| `generate_preview`| Image Processing | Generates cached thumbnails for JPEG, PNG, and WebP via `sharp`. |
-| `get_file_info` | Metadata | Deep inspection including permissions, exact MIME types, and timestamps. |
+| `read_files` | Read multiple files | **Concurrent reads:** Batch-read multiple files with parallel execution. |
+| `write_file` | Create/Overwrite | **Atomic Writing:** Supports Handlebars templates and **Content Tracking** (in-memory diffs, gzip compression, extended metadata). |
+| `update_file` | Patching | **Search & Replace:** Apply precise line-based edits with `overwrite`, `append`, or `diff` modes. |
+| `move_file` | Move/Rename | **Cross-device support:** Uses copy+delete fallback for cross-filesystem moves. |
+| `copy_file` | Copy | **Recursive copy:** Copies files and directories. |
+| `delete_file` | Delete | **Simple deletion:** Removes files with validation. |
+
+> **Note:** `search_files`, `directory_tree`, `generate_preview`, and `get_file_info` are planned for future versions.
 
 -----
 
 ## 🛠 Workflow Examples
 
-### Example: The "Analyze and Document" Chain
+### Example: The "Read and Transform" Chain
 
-This single request finds a specific source file, reads it (extracting text if it's a doc), and generates a summary file using a template.
+This single request reads a file, transforms its content using a template, and writes the result.
 
 ```jsonc
 {
@@ -69,28 +71,27 @@ This single request finds a specific source file, reads it (extracting text if i
     "name": "internal-fs",
     "serverType": {
       "type": "filesystem",
-      "config": { "rootDirectory": "/src/project", "provider": "batchit-internal" }
+      "config": { "rootDirectory": "/project", "provider": "batchit-internal" }
     }
   },
   "operations": [
     {
-      "id": "find_logic",
-      "tool": "search_files",
-      "arguments": { "pattern": "**/core_logic.ts" }
-    },
-    {
-      "id": "read_src",
+      "id": "read_config",
       "tool": "read_file",
-      "dependsOn": "find_logic",
-      "arguments": { "path": "{{results.find_logic.[0].path}}" }
+      "arguments": { "path": "/project/config.json" }
     },
     {
-      "id": "generate_docs",
+      "id": "read_data",
+      "tool": "read_file",
+      "arguments": { "path": "/project/data.csv" }
+    },
+    {
+      "id": "generate_report",
       "tool": "write_file",
-      "dependsOn": "read_src",
+      "dependsOn": ["read_config", "read_data"],
       "arguments": {
-        "path": "docs/analysis.md",
-        "template": "# Analysis of {{results.find_logic.[0].path}}\n\nGenerated: {{now}}\n\nContent Summary:\n{{results.read_src}}"
+        "path": "/project/report.txt",
+        "template": "Report Generated: {{now}}\n\nConfig Version: {{result.read_config.version}}\n\nData Rows: {{length (results.read_data)}}"
       }
     }
   ]
@@ -103,10 +104,10 @@ This single request finds a specific source file, reads it (extracting text if i
 
 | Option | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `maxConcurrent` | `number` | `1` | Number of operations to run in parallel within a batch. |
-| `stopOnError` | `boolean` | `true` | If true, fails the entire batch if a single operation errors out. |
-| `timeoutMs` | `number` | `30000` | Global timeout for the batch execution. |
-| `keepAlive` | `boolean` | `true` | Maintains persistent connections to external MCP servers. |
+| `maxConcurrent` | `number` | `10` | Number of operations to run in parallel within a batch. |
+| `stopOnError` | `boolean` | `false` | If true, fails the entire batch if a single operation errors out. |
+| `timeoutMs` | `number` | `30000` | Global timeout for each operation (ms). |
+| `keepAlive` | `boolean` | `false` | Maintains persistent connections to external MCP servers. |
 
 -----
 
@@ -125,10 +126,15 @@ This single request finds a specific source file, reads it (extracting text if i
     npm install
     ```
 
-3. **Build & Start:**
+3. **Build:**
 
     ```bash
     npm run build
+    ```
+
+4. **Start (runs on stdio):**
+
+    ```bash
     npm start
     ```
 
@@ -141,14 +147,13 @@ Add this to your `claude_desktop_config.json`:
   "mcpServers": {
     "batchit": {
       "command": "node",
-      "args": ["/path/to/mcp-batchit/build/index.js"],
-      "env": {
-        "NODE_ENV": "dev"
-      }
+      "args": ["/ABSOLUTE/PATH/TO/mcp-batchit/build/index.js"]
     }
   }
 }
 ```
+
+> **Important:** Use an absolute path to the built `index.js` file.
 
 -----
 
