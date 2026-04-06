@@ -1,310 +1,213 @@
 # MCP BatchIt
 
-Batch multiple MCP tool calls into a single request with built-in templating, result chaining, dependency-aware execution, and a high-performance internal filesystem provider.
+A batch execution server that lets AI agents run multiple tool calls in a single request.
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+## Why BatchIt?
 
----
+AI agents typically work in a "one tool, one turn" loop — each tool call is a separate round-trip. This adds latency and token overhead for multi-step tasks. BatchIt lets you execute complex workflows in a single request.
 
-## 🚀 Overview
+**Without BatchIt:** 5 tool calls = 5 round-trips = slower execution  
+**With BatchIt:** 5 tool calls = 1 request = faster execution
 
-**MCP BatchIt** is a sophisticated orchestrator for the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). While standard MCP agents typically operate in a "one tool, one turn" loop, BatchIt empowers LLMs to execute complex, multi-step execution graphs in a single round trip.
+## What You Can Do
 
-By combining a **Dependency-Aware Executor** with a **High-Performance Internal Filesystem**, BatchIt reduces latency, minimizes token usage for repetitive tasks, and adds "superpowers" like PDF/DOCX extraction and image preview generation that standard filesystem servers lack.
+### Chain Results Across Operations
 
-### How It Works
+Instead of copying output from one tool into the next, reference it directly:
 
+```json
+{
+  "operations": [
+    { "id": "config", "tool": "read_file", "arguments": { "path": "/project/config.json" } },
+    {
+      "id": "report",
+      "tool": "write_file",
+      "dependsOn": ["config"],
+      "arguments": {
+        "path": "/project/output.txt",
+        "template": "Version: {{results.config.version}}"
+      }
+    }
+  ]
+}
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                            Single Batch Request                       │
-├─────────────────────────────────────────────────────────────────────┤
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐          │
-│  │   Operation 1│    │   Operation 2│    │   Operation 3│          │
-│  │   (No deps)  │───▶│ (No deps)   │    │ (deps on 1,2) │          │
-│  └──────────────┘    └──────────────┘    └──────────────┘          │
-│          │                │                  │                       │
-│          └────────────────┼──────────────────┘                      │
-│                           ▼                                          │
-│                 ┌──────────────────┐                                 │
-│                 │ Parallel Exec    │                                 │
-│                 │ (up to 10 ops)   │                                 │
-│                 └──────────────────┘                                 │
-└─────────────────────────────────────────────────────────────────────┘
+
+### Parallel Execution
+
+Independent operations run concurrently. Reading 10 files in one request:
+
+```json
+{
+  "operations": [
+    { "id": "file1", "tool": "read_file", "arguments": { "path": "/project/src/a.js" } },
+    { "id": "file2", "tool": "read_file", "arguments": { "path": "/project/src/b.js" } },
+    { "id": "file3", "tool": "read_file", "arguments": { "path": "/project/src/c.js" } },
+    { "id": "file4", "tool": "read_file", "arguments": { "path": "/project/src/d.js" } },
+    { "id": "file5", "tool": "read_file", "arguments": { "path": "/project/src/e.js" } }
+  ]
+}
 ```
 
----
+These 5 reads execute in parallel in a single batch.
 
-## ✨ Key Capabilities
+### Dependency Ordering
 
-### 1. 🧠 Intelligent Batch Execution
+Operations with `dependsOn` wait until their dependencies finish:
 
-* **Dependency Graphs:** Use the `dependsOn` field to define execution order. BatchIt builds a directed acyclic graph (DAG) and executes tasks as soon as their dependencies are met.
-* **Parallel Processing:** Configurable `maxConcurrent` settings allow you to blast through independent operations (like reading 20 files at once) without bottlenecking.
-* **Resiliency & Recovery:** Built-in exponential backoff automatically handles transient filesystem locks or network hiccups.
-* **Cancellation Support:** Respect MCP `notifications/cancelled` for graceful operation interruption.
+```json
+{
+  "operations": [
+    { "id": "fetch", "tool": "read_file", "arguments": { "path": "/data/source.json" } },
+    {
+      "id": "process",
+      "tool": "write_file",
+      "dependsOn": ["fetch"],
+      "arguments": {
+        "path": "/data/processed.txt",
+        "template": "Processed: {{uppercase results.fetch.content}}"
+      }
+    },
+    {
+      "id": "backup",
+      "tool": "write_file",
+      "dependsOn": ["fetch"],
+      "arguments": {
+        "path": "/backup/source_backup.txt",
+        "content": "{{results.fetch}}"
+      }
+    }
+  ]
+}
+```
 
-### 2. 🔗 Result Chaining & "Magic" Templating
+`process` and `backup` both depend on `fetch`, so they run in parallel after `fetch` completes.
 
-Stop manually copying outputs from one tool into the arguments of the next.
+## Usage
 
-* **Variable Injection:** Reference any previous output using `${results.<operationId>.path.to.property}` syntax.
-* **Handlebars Power:** Full Handlebars integration with 20+ built-in helpers (see [Template Helpers](#-template-helpers) below).
-* **Template Cache:** LRU-cached template resolution for high-performance repeated execution.
-* **Custom Helpers:** Register your own helpers via `registerHelper` for domain-specific logic.
-* **Dynamic Path Resolution:** Automatically resolve file paths or configuration values discovered during the batch.
+You call the `batch_execute` tool with your target server and operations array.
 
-### 3. 📁 Enhanced Filesystem Provider
+### Internal Filesystem Example
 
-The `batchit-internal` provider is designed for speed and rich metadata. It's not just a wrapper; it's a full-featured suite.
-
-* **Atomic Writes:** `write_file` uses rename-on-complete for safe concurrent writes.
-* **Content Tracking:** In-memory diff tracking and gzip compression for large file changes.
-* **Type-Aware Reads:** Automatic content-type detection for PDF, DOCX, Markdown, and more.
-* **Exclusion Support:** Define `excludedDirs` to sandbox sensitive directories (`node_modules`, `.git`, etc.).
-
----
-
-## 📂 Internal Tool Reference
-
-| Tool | Capability | Unique "Superpowers" |
-|:------|:-----------|:---------------------|
-| `read_file` | Read text/binary | **OCR-like Extraction:** Automatically converts PDF and DOCX to clean text. Supports line numbering and charset detection. |
-| `read_files` | Read multiple files | **Concurrent reads:** Batch-read multiple files with parallel execution. |
-| `write_file` | Create/Overwrite | **Atomic Writing:** Supports Handlebars templates and **Content Tracking** (in-memory diffs, gzip compression, extended metadata). |
-| `update_file` | Patching | **Search & Replace:** Apply precise line-based edits with `overwrite`, `append`, or `diff` modes. |
-| `move_file` | Move/Rename | **Cross-device support:** Uses copy+delete fallback for cross-filesystem moves. |
-| `copy_file` | Copy | **Recursive copy:** Copies files and directories. |
-| `delete_file` | Delete | **Simple deletion:** Removes files with validation. |
-
-### Additional Planned Tools
-
-> **Note:** The following tools are planned for future versions and are not yet available:
->
-> * `search_files` - Regex search across files
-> * `directory_tree` - Generate directory listings
-> * `generate_preview` - Generate file previews (image thumbnails, etc.)
-> * `get_file_info` - Metadata and file info queries
-
----
-
-## 🛠 Workflow Examples
-
-### Example 1: The "Read and Transform" Chain
-
-This single request reads a config and data file, transforms their content using a template, and writes the result.
+Read multiple files, transform the content, and write a combined output:
 
 ```json
 {
   "targetServer": {
-    "name": "internal-fs",
+    "name": "project",
     "serverType": {
       "type": "filesystem",
       "config": {
-        "rootDirectory": "/project",
+        "rootDirectory": "/path/to/project",
         "provider": "batchit-internal"
       }
     }
   },
   "operations": [
+    { "id": "read_src", "tool": "read_file", "arguments": { "path": "/path/to/project/src/index.js" } },
+    { "id": "read_test", "tool": "read_file", "arguments": { "path": "/path/to/project/test/index.test.js" } },
     {
-      "id": "read_config",
-      "tool": "read_file",
-      "arguments": { "path": "/project/config.json" }
-    },
-    {
-      "id": "read_data",
-      "tool": "read_file",
-      "arguments": { "path": "/project/data.csv" }
-    },
-    {
-      "id": "generate_report",
+      "id": "write_combined",
       "tool": "write_file",
-      "dependsOn": ["read_config", "read_data"],
+      "dependsOn": ["read_src", "read_test"],
       "arguments": {
-        "path": "/project/report.txt",
-        "template": "Report Generated: {{now}}\n\nConfig Version: {{results.read_config.version}}\n\nData Rows: {{length results.read_data}}"
+        "path": "/path/to/project/combined.txt",
+        "template": "SOURCE:\n{{results.read_src}}\n\nTESTS:\n{{results.read_test}}"
       }
     }
   ]
 }
 ```
 
-### Example 2: File Monitoring Pipeline
+### External MCP Server Example
 
-Watch a directory and generate alerts when new files appear.
+Orchestrate calls to any MCP server (filesystem, git, memory, etc.):
 
 ```json
 {
   "targetServer": {
-    "name": "internal-fs",
+    "name": "filesystem",
     "serverType": {
-      "type": "filesystem",
+      "type": "mcp",
       "config": {
-        "rootDirectory": "/logs",
-        "provider": "batchit-internal"
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
       }
     }
   },
   "operations": [
-    {
-      "id": "scan_logs",
-      "tool": "directory_tree",
-      "arguments": { "path": "/logs", "filter": "*.log" }
-    },
-    {
-      "id": "read_error",
-      "tool": "read_file",
-      "dependsOn": ["scan_logs"],
-      "arguments": {
-        "path": "{{results.scan_logs.newFiles[0].path}}"
-      }
-    },
-    {
-      "id": "write_alert",
-      "tool": "write_file",
-      "dependsOn": ["read_error"],
-      "arguments": {
-        "path": "/alerts/error_{{now}}.txt",
-        "template": "ALERT: New log detected\nSource: {{results.read_error.path}}\nTimestamp: {{now}}\nContent:\n{{results.read_error.content}}"
-      }
-    }
+    { "id": "list", "tool": "list_directory", "arguments": { "path": "/tmp" } },
+    { "id": "read", "tool": "read_file", "dependsOn": ["list"], "arguments": { "path": "/tmp/notes.txt" } }
   ]
 }
 ```
 
-### Example 3: Data Transformation Pipeline
+## Result Chaining Syntax
 
-Transform a CSV file, apply business logic, and write results.
+Reference outputs from completed operations:
+
+| Syntax | Meaning |
+|--------|---------|
+| `${results.<id>}` | Full result |
+| `${results.<id>.property}` | Property access |
+| `${results.<id>.nested.property}` | Nested property |
+
+In templates:
 
 ```json
 {
-  "targetServer": {
-    "name": "internal-fs",
-    "serverType": {
-      "type": "filesystem",
-      "config": {
-        "rootDirectory": "/data",
-        "provider": "batchit-internal"
-      }
-    }
-  },
-  "operations": [
-    {
-      "id": "load_config",
-      "tool": "read_file",
-      "arguments": { "path": "/data/rules.json" }
-    },
-    {
-      "id": "load_data",
-      "tool": "read_file",
-      "arguments": { "path": "/data/transactions.csv" }
-    },
-    {
-      "id": "apply_rules",
-      "tool": "write_file",
-      "dependsOn": ["load_config", "load_data"],
-      "arguments": {
-        "path": "/data/flagged.json",
-        "template": "{{#each results.load_data.splitLines}}\n{{this}}\n{{/each}}"
-      }
-    }
-  ]
+  "arguments": {
+    "path": "/output/{{results.input.filename}}",
+    "template": "Data: {{uppercase results.input.content}}"
+  }
 }
 ```
 
----
+## Template Helpers
 
-## ⚙️ Configuration & Options
+Built-in Handlebars helpers for manipulating values in templates:
 
-| Option | Type | Default | Description |
-|:------|:-----|:--------|:------------|
-| `maxConcurrent` | `number` | `10` | Number of operations to run in parallel within a batch. |
-| `stopOnError` | `boolean` | `false` | If true, fails the entire batch if a single operation errors out. |
-| `timeoutMs` | `number` | `30000` | Global timeout for each operation (ms). |
-| `keepAlive` | `boolean` | `false` | Maintains persistent connections to external MCP servers. |
-| `rootDirectory` | `string` | `cwd` | Root directory for internal filesystem operations (sandbox boundary). |
-| `excludedDirs` | `string[]` | `[]` | Directory patterns to exclude from operations (e.g., `["node_modules", ".git"]`). |
+| Category | Helpers |
+|----------|---------|
+| String | `uppercase`, `lowercase`, `capitalize`, `trim`, `substring`, `replace`, `concat` |
+| Conditional | `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `and`, `or`, `not` |
+| Date/Time | `formatDate`, `timeAgo`, `now` |
+| Math | `add`, `subtract`, `multiply`, `divide`, `mod`, `round`, `ceil`, `floor` |
+| Collection | `length`, `first`, `last`, `join`, `includes` |
+| JSON | `{{json value}}`, `{{parseJson string}}` |
 
----
+## Configuration
 
-## 🧰 Template Helpers
+| Option | Default | Description |
+|--------|---------|-------------|
+| `maxConcurrent` | 10 | Max parallel operations per dependency layer |
+| `timeoutMs` | 30000 | Per-operation timeout |
+| `stopOnError` | false | Stop batch on first failure |
+| `keepAlive` | false | Keep connection open after batch |
 
-Built-in Handlebars helpers for powerful text manipulation:
+## Internal Provider Tools
 
-### String Operations
+When using `provider: "batchit-internal"`:
 
-* `uppercase`, `lowercase`, `capitalize`, `trim`
-* `substring(start, end)`, `replace(from, to)`, `concat(str)`
+| Tool | Description |
+|------|-------------|
+| `read_file` | Read file content (supports PDF/DOCX extraction) |
+| `read_files` | Batch read multiple files concurrently |
+| `write_file` | Create or overwrite file with optional template |
+| `update_file` | Modify file with `overwrite`, `append`, or `diff` mode |
+| `move_file` | Move or rename file |
+| `copy_file` | Copy file or directory |
+| `delete_file` | Delete file |
 
-### Conditional Logic
+## Setup
 
-* `eq`, `ne`, `lt`, `lte`, `gt`, `gte`
-* `and(bool1, bool2)`, `or(bool1, bool2)`, `not(bool)`
-
-### Date/Time
-
-* `formatDate(date, format)`, `timeAgo(date)`, `now`
-
-### Math
-
-* `add(a, b)`, `subtract(a, b)`, `multiply(a, b)`, `divide(a, b)`
-* `mod(a, b)`, `round(num)`, `ceil(num)`, `floor(num)`
-
-### Collection
-
-* `length(array)`, `first(array)`, `last(array)`, `join(array, delim)`, `includes(array, item)`
-
-### Custom Helper Registration
-
-Register your own helpers:
-
-```json
-{
-  "operations": [
-    {
-      "id": "setup_helper",
-      "tool": "registerHelper",
-      "arguments": {
-        "name": "formatCurrency",
-        "fn": "{{value}} | add .{{number 2}}"
-      }
-    }
-  ]
-}
+```bash
+npm install
+npm run build
+npm start
 ```
 
----
-
-## 📦 Installation
-
-1. **Clone the Repository:**
-
-    ```bash
-    git clone https://github.com/ryanjoachim/mcp-batchit.git
-    cd mcp-batchit
-    ```
-
-2. **Install Dependencies:**
-
-    ```bash
-    npm install
-    ```
-
-3. **Build:**
-
-    ```bash
-    npm run build
-    ```
-
-4. **Start (runs on stdio):**
-
-    ```bash
-    npm start
-    ```
-
-### Integration with Claude Desktop
-
-Add this to your `claude_desktop_config.json`:
+Add to Claude Desktop (`claude_desktop_config.json`):
 
 ```json
 {
@@ -317,49 +220,6 @@ Add this to your `claude_desktop_config.json`:
 }
 ```
 
-> **Important:** Use an absolute path to the built `index.js` file.
+## License
 
-### Available npm Scripts
-
-| Script | Description |
-|:-------|:------------|
-| `npm run build` | Compile TypeScript to JavaScript |
-| `npm run build:clean` | Clean and rebuild |
-| `npm run test` | Run Jest test suite |
-| `npm run validate` | Run tests and lint checks |
-| `npm run lint` | Format code with Prettier |
-| `npm run check:types` | Check TypeScript types |
-
----
-
-## 🛡 Security & Constraints
-
-* **Path Validation:** All internal filesystem operations are sandboxed to the `rootDirectory`. Efforts to escape using `../` are blocked.
-* **Recursion Protection:** BatchIt includes checks to prevent it from attempting to call itself as an external transport, avoiding infinite loops.
-* **Excluded Directories:** You can define `excludedDirs` (e.g., `node_modules`, `.git`) to prevent accidental heavy processing or data leaks.
-* **Connection Limits:** Each server identity maintains a single persistent connection; additional requests reuse existing connections.
-* **Idle Timeout:** Connections automatically close after 5 minutes of inactivity (configurable via `maxIdleTimeMs`).
-
----
-
-## 🔍 Architecture
-
-### Connection Management
-
-BatchIt uses a connection manager to maintain persistent connections to external MCP servers and manage the internal filesystem provider.
-
-* **Connection Pooling:** One connection per server identity (name + type + transport)
-* **Idle Timeout:** Connections close automatically after 5 minutes of inactivity
-* **Graceful Shutdown:** All connections close cleanly on `SIGINT`/`SIGTERM`
-
-### Result Caching
-
-* **LRU Cache:** Templates are cached to avoid repeated compilation
-* **Result Cache:** Operation results are stored for quick result resolution
-* **Template Cache:** High-performance repeated execution of the same templates
-
----
-
-## 📝 License
-
-This project is licensed under the **MIT License**. Created with ❤️ for the MCP ecosystem.
+MIT
