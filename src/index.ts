@@ -388,12 +388,13 @@ class BatchExecutor {
 // Server Setup
 const connectionManager = new ConnectionManager()
 const batchExecutor = new BatchExecutor(connectionManager)
-const server = new McpServer({
-  name: "mcp-batchit",
-  version: VERSION,
-  // description is surfaced to clients during the initialize handshake, giving them
-  // a usage guide without consuming tool description tokens on every tools/list call.
-  description: `mcp-batchit executes multiple MCP tool calls in a single batch request with dependency ordering and result chaining.
+const server = new McpServer(
+  {
+    name: "mcp-batchit",
+    version: VERSION,
+    // description is surfaced to clients during the initialize handshake, giving them
+    // a usage guide without consuming tool description tokens on every tools/list call.
+    description: `mcp-batchit executes multiple MCP tool calls in a single batch request with dependency ordering and result chaining.
 
 Supports two server types:
 - batchit-internal: Optimised local filesystem provider (write_file, update_file, read_file, etc.)
@@ -412,12 +413,15 @@ Options (all optional):
 - keepAlive (default false): keep the target server connection open after the batch
 
 All file paths must be absolute.`,
-  capabilities: {
-    // tools.listChanged: false — this server exposes a fixed tool set
-    tools: { listChanged: false },
-    resources: {},
   },
-})
+  {
+    capabilities: {
+      // tools.listChanged: false — this server exposes a fixed tool set
+      tools: { listChanged: false },
+      resources: {},
+    },
+  }
+)
 // tool() expects ZodRawShapeCompat (the raw shape), not a full ZodObject.
 // Using .shape unwraps the ZodObject so the SDK can infer args types correctly,
 // and ensures the call resolves to the right overload — which returns RegisteredTool.
