@@ -145,7 +145,15 @@ export function validateTemplate(
         message: error.message,
         line: location.line,
         column: location.column,
-        type: error.message.includes("partial") ? "partial" : error.message.includes("not found") ? "helper" : /Parse error|Expecting|Expected|parse error|syntax/i.test(error.message) ? "syntax" : "other",
+        type: error.message.includes("partial")
+          ? "partial"
+          : error.message.includes("not found")
+            ? "helper"
+            : /Parse error|Expecting|Expected|parse error|syntax/i.test(
+                  error.message
+                )
+              ? "syntax"
+              : "other",
       })
     }
     return { valid: false, errors }

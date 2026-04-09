@@ -2,17 +2,6 @@ import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
 import { ErrorManager } from "../errorManager.js"
 
 describe("ErrorManager", () => {
-  describe("formatFileError", () => {
-    it("formats file operation errors correctly", () => {
-      const message = ErrorManager.formatFileError(
-        "read",
-        "/test.txt",
-        "file not found"
-      )
-      expect(message).toBe("Failed to read /test.txt: file not found")
-    })
-  })
-
   describe("formatValidationError", () => {
     it("formats validation errors correctly", () => {
       const message = ErrorManager.formatValidationError(
@@ -63,23 +52,6 @@ describe("ErrorManager", () => {
       expect(error.message).toContain(
         "Permission denied: Cannot write /test.txt"
       )
-    })
-  })
-
-  describe("createTimeoutError", () => {
-    it("creates timeout errors with correct code and message", () => {
-      const error = ErrorManager.createTimeoutError("read operation")
-      expect(error).toBeInstanceOf(McpError)
-      expect(error.code).toBe(ErrorCode.RequestTimeout)
-      expect(error.message).toContain("read operation timed out")
-    })
-
-    it("includes additional details when provided", () => {
-      const error = ErrorManager.createTimeoutError(
-        "read operation",
-        "network error"
-      )
-      expect(error.message).toContain("read operation timed out: network error")
     })
   })
 
@@ -158,25 +130,6 @@ describe("ErrorManager", () => {
       expect(error.code).toBe(ErrorCode.InvalidParams)
       expect(error.message).toContain(
         "Invalid path: /test.txt (outside root directory)"
-      )
-    })
-  })
-
-  describe("createUnsupportedOperationError", () => {
-    it("creates unsupported operation errors with correct code and message", () => {
-      const error = ErrorManager.createUnsupportedOperationError("symlink")
-      expect(error).toBeInstanceOf(McpError)
-      expect(error.code).toBe(ErrorCode.MethodNotFound)
-      expect(error.message).toContain("Operation not supported: symlink")
-    })
-
-    it("includes additional details when provided", () => {
-      const error = ErrorManager.createUnsupportedOperationError(
-        "symlink",
-        "security risk"
-      )
-      expect(error.message).toContain(
-        "Operation not supported: symlink (security risk)"
       )
     })
   })

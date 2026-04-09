@@ -10,7 +10,6 @@ import path from "path"
 import { isBinaryFile } from "isbinaryfile"
 import { FileSystem } from "./FileSystem.js"
 import { getMimeType } from "./fileTypeHandlers.js"
-import { previewCache } from "./previewCache.js"
 import { generateDiff } from "./diffGenerator.js"
 import { collectMetadata } from "./metadataCollector.js"
 import {
@@ -73,11 +72,6 @@ export async function trackContentModification(
       operation,
     }
 
-    // Invalidate preview cache when file is modified or deleted
-    if (operation === "update" || operation === "delete") {
-      previewCache.invalidate(normalized)
-    }
-
     // Don't try to get additional info for deleted files
     if (operation === "delete") {
       return modification
@@ -109,23 +103,36 @@ export async function trackContentModification(
       // Collect extended metadata if requested
       if (trackingOptions.metadata) {
         try {
-          modification.metadata = await collectMetadata(normalized, trackingOptions.metadata)
+          modification.metadata = await collectMetadata(
+            normalized,
+            trackingOptions.metadata
+          )
         } catch {
           // Ignore metadata collection errors - non-critical
         }
       }
 
       // Track diff if requested and this is an update
-      if (trackingOptions.trackDiff && operation === "update" && oldContent !== undefined) {
+      if (
+        trackingOptions.trackDiff &&
+        operation === "update" &&
+        oldContent !== undefined
+      ) {
         // Read the new content from file
-        const newContent = await fileSystem.readFile(normalized, { checkBinary: false })
+        const newContent = await fileSystem.readFile(normalized, {
+          checkBinary: false,
+        })
 
         // Generate diff in-memory (no temp files)
         const diffResult = await generateDiff(oldContent, newContent, {
           contextLines: trackingOptions.diffContextLines,
           ...trackingOptions.diffOptions,
-          compress: trackingOptions.compression?.enabled ?? trackingOptions.diffOptions?.compress,
-          compressionLevel: trackingOptions.compression?.level ?? trackingOptions.diffOptions?.compressionLevel,
+          compress:
+            trackingOptions.compression?.enabled ??
+            trackingOptions.diffOptions?.compress,
+          compressionLevel:
+            trackingOptions.compression?.level ??
+            trackingOptions.diffOptions?.compressionLevel,
         })
 
         if (!diffResult.identical) {
@@ -153,50 +160,4 @@ export async function trackContentModification(
       `Failed to track ${operation} operation for ${path.basename(filePath)}`
     )
   }
-}
-
-/**
- * Tracks multiple content modifications in batch
- */
-export async function trackContentModifications(
-  modifications: {
-    path: string
-    operation: ContentOperationType
-    oldContent?: string
-  }[],
-  rootDirectory: string,
-  options: Partial<ContentTrackingOptions> = { enabled: true }
-): Promise<ContentModification[]> {
-  // Ensure options has the required 'enabled' property
-  const trackingOptions: ContentTrackingOptions = {
-    enabled: options.enabled ?? true,
-    trackSize: options.trackSize,
-    trackType: options.trackType,
-    trackDiff: options.trackDiff,
-    diffContextLines: options.diffContextLines,
-    diffOptions: options.diffOptions,
-    metadata: options.metadata,
-    compression: options.compression,
-  }
-  const results: ContentModification[] = []
-  const maxConcurrent = 5
-
-  // Process modifications in batches to control concurrency
-  for (let i = 0; i < modifications.length; i += maxConcurrent) {
-    const batch = modifications.slice(i, i + maxConcurrent)
-    const batchResults = await Promise.all(
-      batch.map((mod) =>
-        trackContentModification(
-          mod.path,
-          mod.operation,
-          rootDirectory,
-          mod.oldContent,
-          trackingOptions
-        )
-      )
-    )
-    results.push(...batchResults)
-  }
-
-  return results
 }

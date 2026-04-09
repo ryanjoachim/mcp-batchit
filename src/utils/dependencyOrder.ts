@@ -1,4 +1,30 @@
 import { Operation } from "../types/schemas/batch.js"
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
+
+/**
+ * Validates that all dependsOn references point to IDs that exist in the operation set.
+ * Throws McpError(InvalidParams) if any reference is unknown.
+ */
+export function validateDependsOnReferences(operations: Operation[]): void {
+  const knownIds = new Set<string>()
+  for (const op of operations) {
+    if (op.id) knownIds.add(op.id)
+  }
+
+  for (const op of operations) {
+    if (!op.dependsOn) continue
+    const deps = Array.isArray(op.dependsOn) ? op.dependsOn : [op.dependsOn]
+    for (const dep of deps) {
+      if (!knownIds.has(dep)) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `dependsOn references unknown operation ID: "${dep}". ` +
+            `Known IDs: [${Array.from(knownIds).join(", ")}]`
+        )
+      }
+    }
+  }
+}
 
 /**
  * Creates ordered batches of operations based on dependencies
@@ -16,14 +42,14 @@ export function createOrderedBatches(operations: Operation[]): Operation[][] {
     })
 
   // Get operations with no dependencies first
+  // Note: validateDependsOnReferences() must be called before this function
+  // to ensure all dependsOn IDs exist in the operation set.
   let currentBatch = operations.filter((op) => {
-    // No dependencies or unknown ID
     if (!op.dependsOn) return true
 
-    // Convert to array of dependencies
     const deps = Array.isArray(op.dependsOn) ? op.dependsOn : [op.dependsOn]
-
-    // If any dependency doesn't exist, include it anyway
+    // All deps are validated, so any reference not in idMapping means
+    // it refers to an operation without an explicit ID — treat as ready
     return deps.every((dep) => !idMapping.has(dep))
   })
 
@@ -65,15 +91,4 @@ export function createOrderedBatches(operations: Operation[]): Operation[][] {
   }
 
   return batches
-}
-
-/**
- * Validates that there are no circular dependencies
- */
-export function validateDependencies(operations: Operation[]): void {
-  try {
-    createOrderedBatches(operations)
-  } catch (error) {
-    throw error
-  }
 }

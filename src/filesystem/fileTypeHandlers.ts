@@ -1,11 +1,8 @@
-import mammoth from "mammoth"
-import sharp from "sharp"
 import { promises as fs } from "fs"
 import path from "path"
 import { ErrorManager } from "../utils/errorManager.js"
-import { previewCache } from "./previewCache.js"
 import pdfParse from "./pdfParseWrapper.js"
-import { FileMetadata, PreviewOptions } from "../types/filesystem/fileInfo.js"
+import { FileMetadata } from "../types/filesystem/fileInfo.js"
 
 /**
  * Detects the MIME type of a file based on its extension
@@ -69,6 +66,7 @@ export async function extractTextFromPDF(filePath: string): Promise<string> {
  */
 export async function extractTextFromDOCX(filePath: string): Promise<string> {
   try {
+    const mammoth = await import("mammoth")
     const result = await mammoth.extractRawText({ path: filePath })
     return result.value
   } catch (error) {
@@ -95,13 +93,17 @@ export async function extractFileMetadata(
 
     // Extract additional metadata based on file type
     if (mimeType.startsWith("image/")) {
-      const imageInfo = await sharp(filePath).metadata()
-      metadata.dimensions = {
-        width: imageInfo.width || 0,
-        height: imageInfo.height || 0,
+      try {
+        const sharp = (await import("sharp")).default
+        const imageInfo = await sharp(filePath).metadata()
+        metadata.dimensions = {
+          width: imageInfo.width || 0,
+          height: imageInfo.height || 0,
+        }
+        metadata["format"] = imageInfo.format
+      } catch {
+        // sharp not installed — skip image metadata
       }
-      // Using index signature for custom property
-      metadata["format"] = imageInfo.format
     } else if (mimeType === "application/pdf") {
       const dataBuffer = await fs.readFile(filePath)
       const pdfData = await pdfParse(dataBuffer)
@@ -114,53 +116,6 @@ export async function extractFileMetadata(
     throw ErrorManager.createInvalidFormatError(
       fileType || "file",
       `Failed to extract metadata: ${error instanceof Error ? error.message : String(error)}`
-    )
-  }
-}
-
-/**
- * Generate a preview/thumbnail for supported file types with caching
- *
- * @param filePath Path to the file
- * @param options Preview generation options
- * @returns Buffer containing the preview image or undefined if preview generation is not supported
- */
-export async function generatePreview(
-  filePath: string,
-  options: PreviewOptions = {}
-): Promise<Buffer | undefined> {
-  const mimeType = getMimeType(filePath)
-
-  if (!mimeType?.startsWith("image/")) {
-    return undefined
-  }
-
-  try {
-    // Check cache first
-    const cachedPreview = previewCache.get(filePath, options)
-    if (cachedPreview) {
-      return cachedPreview
-    }
-
-    // Generate new preview
-    const preview = await sharp(filePath)
-      .resize(options.maxWidth, options.maxHeight, {
-        fit: "inside",
-        withoutEnlargement: true,
-      })
-      .toFormat(options.format || "jpeg", {
-        quality: options.quality || 80,
-      })
-      .toBuffer()
-
-    // Cache the preview
-    previewCache.set(filePath, options, preview)
-
-    return preview
-  } catch (error) {
-    throw ErrorManager.createInvalidFormatError(
-      "image",
-      `Failed to generate preview: ${error instanceof Error ? error.message : String(error)}`
     )
   }
 }

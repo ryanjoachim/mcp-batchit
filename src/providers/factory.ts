@@ -139,24 +139,115 @@ function createInternalFilesystemProvider(rootDirectory: string): Provider {
           await fs.deleteFile(String(args.path))
           return "File deleted successfully"
 
+        case "list_directory":
+          if (!("path" in args)) {
+            throw new McpError(
+              ErrorCode.InvalidParams,
+              "Missing required 'path' parameter"
+            )
+          }
+          return fs.listDirectory(String(args.path))
+
+        case "create_directory":
+          if (!("path" in args)) {
+            throw new McpError(
+              ErrorCode.InvalidParams,
+              "Missing required 'path' parameter"
+            )
+          }
+          return fs.createDirectory(
+            "paths" in args && Array.isArray(args.paths)
+              ? args.paths
+              : String(args.path)
+          )
+
+        case "search_files": {
+          if (!("path" in args) || !("pattern" in args)) {
+            throw new McpError(
+              ErrorCode.InvalidParams,
+              "Missing required parameters: path and pattern"
+            )
+          }
+          const searchArgs = args as {
+            path: string
+            pattern: string
+            excludePatterns?: string[]
+            useGlob?: boolean
+            useRegex?: boolean
+            caseSensitive?: boolean
+            wholeWord?: boolean
+            maxConcurrent?: number
+            includeContent?: boolean
+            maxContentPreview?: number
+          }
+          return fs.searchFiles(String(searchArgs.path), {
+            pattern: String(searchArgs.pattern),
+            excludePatterns: searchArgs.excludePatterns,
+            useGlob: searchArgs.useGlob,
+            useRegex: searchArgs.useRegex,
+            caseSensitive: searchArgs.caseSensitive,
+            wholeWord: searchArgs.wholeWord,
+            maxConcurrent: searchArgs.maxConcurrent,
+            includeContent: searchArgs.includeContent,
+            maxContentPreview: searchArgs.maxContentPreview,
+          })
+        }
+
+        case "get_file_info":
+          if (!("path" in args)) {
+            throw new McpError(
+              ErrorCode.InvalidParams,
+              "Missing required 'path' parameter"
+            )
+          }
+          return fs.getFileInfo(String(args.path))
+
+        case "directory_tree": {
+          if (!("path" in args)) {
+            throw new McpError(
+              ErrorCode.InvalidParams,
+              "Missing required 'path' parameter"
+            )
+          }
+          const treeArgs = args as { path: string; format?: "json" | "text" }
+          return fs.directoryTree(
+            String(treeArgs.path),
+            treeArgs.format || "json"
+          )
+        }
+
         case "update_file":
-        case "edit_file": // Support legacy name while promoting update_file in docs
+        case "edit_file": {
+          // Support legacy name while promoting update_file in docs
           if (!("path" in args) || !("operation" in args)) {
             throw new McpError(
               ErrorCode.InvalidParams,
-              "Missing required parameters"
+              "Missing required parameters: path and operation"
             )
           }
-          // Create a proper UpdateOperation object
+          const opArgs = args as {
+            path: string
+            operation: {
+              mode: "overwrite" | "append" | "diff"
+              content?: string
+              diff?: Array<{
+                line: number
+                operation: "insert" | "replace" | "delete"
+                text: string
+              }>
+              tracking?: { enabled: boolean; diffFormat?: string }
+            }
+          }
           const updateOp: UpdateOperation = {
             operation: "update",
-            path: String(args.path),
-            mode: (args.operation as any).mode,
-            content: (args.operation as any).content,
-            diff: (args.operation as any).diff,
-            tracking: (args.operation as any).tracking,
+            path: String(opArgs.path),
+            mode: opArgs.operation.mode,
+            content: opArgs.operation.content,
+            diff: opArgs.operation.diff,
+            tracking: opArgs.operation.tracking,
           }
           return fs.updateFile(updateOp)
+        }
 
         default:
           throw new McpError(

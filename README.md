@@ -25,7 +25,7 @@ Instead of copying output from one tool into the next, reference it directly:
       "dependsOn": ["config"],
       "arguments": {
         "path": "/project/output.txt",
-        "template": "Version: {{results.config.version}}"
+        "template": "Version: {{json results.config}}"
       }
     }
   ]
@@ -73,7 +73,7 @@ Operations with `dependsOn` wait until their dependencies finish:
       "dependsOn": ["fetch"],
       "arguments": {
         "path": "/backup/source_backup.txt",
-        "content": "{{results.fetch}}"
+        "content": "${results.fetch}"
       }
     }
   ]
@@ -111,10 +111,16 @@ Read multiple files, transform the content, and write a combined output:
       "dependsOn": ["read_src", "read_test"],
       "arguments": {
         "path": "/path/to/project/combined.txt",
-        "template": "SOURCE:\n{{results.read_src}}\n\nTESTS:\n{{results.read_test}}"
+        "template": "SOURCE:\n{{json results.read_src}}\n\nTESTS:\n{{json results.read_test}}"
       }
     }
-  ]
+  ],
+  "options": {
+    "maxConcurrent": 10,
+    "timeoutMs": 30000,
+    "stopOnError": false,
+    "keepAlive": false
+  }
 }
 ```
 
@@ -127,24 +133,36 @@ Orchestrate calls to any MCP server (filesystem, git, memory, etc.):
   "targetServer": {
     "name": "filesystem",
     "serverType": {
-      "type": "mcp",
+      "type": "filesystem",
       "config": {
-        "transport": "stdio",
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+        "rootDirectory": "/tmp",
+        "provider": "external"
       }
+    },
+    "transport": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
     }
   },
   "operations": [
     { "id": "list", "tool": "list_directory", "arguments": { "path": "/tmp" } },
     { "id": "read", "tool": "read_file", "dependsOn": ["list"], "arguments": { "path": "/tmp/notes.txt" } }
-  ]
+  ],
+  "options": {
+    "maxConcurrent": 10,
+    "timeoutMs": 30000,
+    "stopOnError": false,
+    "keepAlive": false
+  }
 }
 ```
 
 ## Result Chaining Syntax
 
-Reference outputs from completed operations:
+There are two syntaxes for referencing operation results:
+
+**`${results.<id>}`** — Result references (resolved first, works in any argument value):
 
 | Syntax | Meaning |
 |--------|---------|
@@ -152,16 +170,18 @@ Reference outputs from completed operations:
 | `${results.<id>.property}` | Property access |
 | `${results.<id>.nested.property}` | Nested property |
 
-In templates:
+**`{{helper value}}`** — Handlebars templates (resolved second, only in `template` argument):
 
 ```json
 {
   "arguments": {
-    "path": "/output/{{results.input.filename}}",
+    "path": "/output/file.txt",
     "template": "Data: {{uppercase results.input.content}}"
   }
 }
 ```
+
+Use `{{json value}}` to serialize objects and `{{parseJson string}}` to parse JSON strings.
 
 ## Template Helpers
 
@@ -198,6 +218,11 @@ When using `provider: "batchit-internal"`:
 | `move_file` | Move or rename file |
 | `copy_file` | Copy file or directory |
 | `delete_file` | Delete file |
+| `list_directory` | List contents of a directory |
+| `create_directory` | Create directories (including parent directories) |
+| `search_files` | Search for files by glob pattern, regex, or content |
+| `get_file_info` | Get detailed file/directory metadata (size, dates, permissions) |
+| `directory_tree` | Get recursive directory tree structure (JSON or text) |
 
 ## Setup
 

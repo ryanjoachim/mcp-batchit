@@ -1,12 +1,10 @@
 import { promises as fs } from "fs"
 import path from "path"
 import os from "os"
-import sharp from "sharp"
 import { describe, it, expect, beforeEach, afterEach } from "@jest/globals"
 import { compareFiles, DiffOptions } from "../lineDiff.js"
 import { trackContentModification } from "../contentTracking.js"
-import { extractFileMetadata, generatePreview } from "../fileTypeHandlers.js"
-import { previewCache } from "../previewCache.js"
+import { extractFileMetadata } from "../fileTypeHandlers.js"
 import { McpError } from "@modelcontextprotocol/sdk/types.js"
 import { FileSystem } from "../FileSystem.js"
 
@@ -128,92 +126,6 @@ describe("Filesystem Operations", () => {
 
       // Test metadata
       expect(metadata.mimeType).toBe("text/plain")
-    })
-
-    it("should extract metadata from image files", async () => {
-      const imagePath = path.join(testDir, "test.png")
-      const width = 300
-      const height = 200
-
-      await sharp({
-        create: {
-          width,
-          height,
-          channels: 4,
-          background: { r: 255, g: 0, b: 0, alpha: 1 },
-        },
-      })
-        .png()
-        .toFile(imagePath)
-      const metadata = await extractFileMetadata(imagePath)
-
-      expect(metadata.mimeType).toBe("image/png")
-      expect(metadata.dimensions).toBeDefined()
-      expect(metadata.dimensions?.width).toBe(width)
-      expect(metadata.dimensions?.height).toBe(height)
-      expect(metadata["format"]).toBe("png")
-      expect(metadata.format).toBe("png")
-    })
-
-    it("should generate and cache previews", async () => {
-      // Create red image and convert to Buffer
-      const redImage = await sharp({
-        create: {
-          width: 300,
-          height: 200,
-          channels: 4,
-          background: { r: 255, g: 0, b: 0, alpha: 1 },
-        },
-      })
-        .png()
-        .toBuffer()
-
-      const imagePath = path.join(testDir, "test.png")
-      await fs.writeFile(imagePath, redImage)
-
-      const options = {
-        maxWidth: 100,
-        maxHeight: 100,
-        format: "jpeg" as const,
-        quality: 80,
-      }
-
-      // First request should generate new preview
-      const preview1 = await generatePreview(imagePath, options)
-      expect(preview1).toBeDefined()
-
-      // Second request should return cached preview
-      const preview2 = await generatePreview(imagePath, options)
-      expect(preview2).toBeDefined()
-      expect(preview1!.equals(preview2!)).toBe(true)
-
-      // Verify cache is being used
-      expect(previewCache.size()).toBe(1)
-
-      // Create completely different green image
-      const greenImage = await sharp({
-        create: {
-          width: 300,
-          height: 200,
-          channels: 4,
-          background: { r: 0, g: 255, b: 0, alpha: 1 },
-        },
-      })
-        .png()
-        .toBuffer()
-
-      // Write new image and clear cache
-      previewCache.clear()
-      await fs.writeFile(imagePath, greenImage)
-
-      // Generate new preview - should be different from red image preview
-      const preview3 = await generatePreview(imagePath, options)
-      expect(preview3).toBeDefined()
-
-      // Compare actual Buffer contents
-      expect(preview1!.toString("base64")).not.toBe(
-        preview3!.toString("base64")
-      )
     })
   })
 

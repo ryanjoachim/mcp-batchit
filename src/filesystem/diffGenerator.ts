@@ -7,10 +7,9 @@
  */
 import { createTwoFilesPatch } from "diff"
 import { promisify } from "util"
-import { gzip, gunzip } from "zlib"
+import { gzip } from "zlib"
 
 const gzipAsync = promisify(gzip)
-const gunzipAsync = promisify(gunzip)
 
 /**
  * Options for diff generation
@@ -95,7 +94,10 @@ export interface DiffResult {
 /**
  * Normalizes line endings and optionally handles whitespace and case
  */
-function normalizeContent(content: string, options: DiffGenerationOptions = {}): string {
+function normalizeContent(
+  content: string,
+  options: DiffGenerationOptions = {}
+): string {
   let result = content.replace(/\r\n/g, "\n")
 
   if (options.normalizeWhitespace !== false) {
@@ -112,7 +114,7 @@ function normalizeContent(content: string, options: DiffGenerationOptions = {}):
 /**
  * Parses diff statistics from a diff string
  */
-export function parseDiffStats(diff: string): {
+function parseDiffStats(diff: string): {
   additions: number
   deletions: number
   linesChanged: number
@@ -122,11 +124,9 @@ export function parseDiffStats(diff: string): {
   let deletions = 0
 
   for (const line of lines) {
-    // + line but not +++ (which is the new file header)
     if (line.startsWith("+") && !line.startsWith("+++")) {
       additions++
     }
-    // - line but not --- (which is the old file header)
     if (line.startsWith("-") && !line.startsWith("---")) {
       deletions++
     }
@@ -145,15 +145,6 @@ export function parseDiffStats(diff: string): {
 async function compressDiff(diff: string, level: number = 6): Promise<Buffer> {
   const buffer = Buffer.from(diff, "utf8")
   return await gzipAsync(buffer, { level })
-}
-
-/**
- * Decompresses a compressed diff string
- */
-export async function decompressDiff(compressedDiff: string): Promise<string> {
-  const buffer = Buffer.from(compressedDiff, "base64")
-  const decompressed = await gunzipAsync(buffer)
-  return decompressed.toString("utf8")
 }
 
 /**
@@ -263,28 +254,4 @@ export async function generateDiff(
     additions: stats.additions,
     deletions: stats.deletions,
   }
-}
-
-/**
- * Generates a diff from file paths (uses in-memory reading, no temp files)
- *
- * @param oldPath - Path to the original file
- * @param newPath - Path to the new file
- * @param options - Diff generation options
- * @returns DiffResult with diff and metadata
- */
-export async function generateDiffFromFiles(
-  oldPath: string,
-  newPath: string,
-  options: DiffGenerationOptions = {}
-): Promise<DiffResult> {
-  const fs = await import("fs/promises")
-
-  // Read file contents
-  const [oldContent, newContent] = await Promise.all([
-    fs.readFile(oldPath, "utf8"),
-    fs.readFile(newPath, "utf8"),
-  ])
-
-  return generateDiff(oldContent, newContent, options)
 }

@@ -14,7 +14,6 @@ import path from "path"
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
 import { ErrorManager } from "../utils/errorManager.js"
 import { PathOptions, PathValidationResult } from "../types/filesystem/paths.js"
-import fs from "fs/promises"
 
 /**
  * Creates a PathValidationResult from path validation information.
@@ -127,39 +126,5 @@ export function validatePathWithResult(
 
     // Re-throw other errors
     throw error
-  }
-}
-
-/**
- * Enhanced path validation that uses the new type system.
- * Validates a path and returns detailed validation information.
- *
- * @param filePath The path to validate
- * @param options Path validation options
- * @returns A Promise resolving to a PathValidationResult object
- */
-export async function validatePathWithOptions(
-  filePath: string,
-  options: PathOptions
-): Promise<PathValidationResult> {
-  // First perform basic validation
-  const result = validatePathWithResult(filePath, options)
-
-  // If there was an error or path is not within root, return early
-  if (!result.isWithinRoot || "error" in result) {
-    return result
-  }
-
-  try {
-    const stats = await fs.stat(result.normalizedPath)
-    return createPathValidationResult(
-      result.normalizedPath,
-      stats.isDirectory(),
-      result.isWithinRoot,
-      result.error
-    )
-  } catch (error) {
-    // If the path doesn't exist, keep the original directory determination
-    return result
   }
 }

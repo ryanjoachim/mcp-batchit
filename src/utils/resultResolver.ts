@@ -7,10 +7,25 @@ import {
   UpdateResult,
   MoveResult,
   CopyResult,
-  DeleteResult,
 } from "../types/filesystem/results.js"
 
-const RESULT_REFERENCE_REGEX = /\${results\.(.*?)}/g
+const RESULT_REFERENCE_REGEX = /\$\{results\.([^}]+)}/g
+
+/**
+ * Safely access a property on an unknown result object.
+ * Isolates the `any` cast to a single location rather than scattering it
+ * throughout the resolver.
+ */
+function getProperty(obj: unknown, key: string): unknown {
+  if (
+    obj !== null &&
+    typeof obj === "object" &&
+    key in (obj as Record<string, unknown>)
+  ) {
+    return (obj as Record<string, unknown>)[key]
+  }
+  return undefined
+}
 
 /**
  * Type guard to check if a result is a FileSystemResult
@@ -71,45 +86,6 @@ export function isUpdateResult(result: unknown): result is UpdateResult {
 }
 
 /**
- * Type guard to check if a result is a MoveResult
- *
- * @param result The result to check
- * @returns True if the result is a MoveResult
- */
-export function isMoveResult(result: unknown): result is MoveResult {
-  return (
-    isFileSystemResult(result) &&
-    (result as FileSystemResult).operation === "move"
-  )
-}
-
-/**
- * Type guard to check if a result is a CopyResult
- *
- * @param result The result to check
- * @returns True if the result is a CopyResult
- */
-export function isCopyResult(result: unknown): result is CopyResult {
-  return (
-    isFileSystemResult(result) &&
-    (result as FileSystemResult).operation === "copy"
-  )
-}
-
-/**
- * Type guard to check if a result is a DeleteResult
- *
- * @param result The result to check
- * @returns True if the result is a DeleteResult
- */
-export function isDeleteResult(result: unknown): result is DeleteResult {
-  return (
-    isFileSystemResult(result) &&
-    (result as FileSystemResult).operation === "delete"
-  )
-}
-
-/**
  * Resolves result references in operation arguments
  * Handles both direct value replacements and nested object properties
  * Supports both old and new result types
@@ -159,7 +135,7 @@ export function getResultProperty(
       propertyName === "success" ||
       propertyName === "operation"
     ) {
-      return (result as any)[propertyName]
+      return getProperty(result, propertyName)
     }
 
     // Handle operation-specific properties
@@ -272,7 +248,7 @@ function resolvePropertyPath(result: unknown, path: string[]): unknown {
           )
         }
       } else {
-        resolved = (resolved as any)[mappedProp]
+        resolved = getProperty(resolved, mappedProp)
       }
 
       // Continue with remaining path segments
@@ -283,7 +259,7 @@ function resolvePropertyPath(result: unknown, path: string[]): unknown {
             `Cannot access property ${path[i]} of non-object value`
           )
         }
-        resolved = (resolved as any)[path[i]]
+        resolved = getProperty(resolved, path[i])
         if (resolved === undefined) {
           throw new McpError(
             ErrorCode.InvalidParams,
@@ -326,8 +302,9 @@ function resolveStringReferences(value: string): unknown {
     return value
   }
 
-  // If the value is a complete reference
-  const match = value.match(/^\${results\.(.*?)}$/)
+  // If the value is a complete reference — use [^}]+ to avoid
+  // matching across closing braces in strings with multiple references
+  const match = value.match(/^\$\{results\.([^}]+)}$/)
   if (match) {
     const path = match[1].split(".")
     const resultId = path[0]

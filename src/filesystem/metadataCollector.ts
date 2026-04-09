@@ -142,7 +142,9 @@ export async function collectMetadata(
 
   const metadata: ExtendedFileMetadata = {
     size: binary ? stats.size : await readFile(filePath).then((b) => b.length),
-    mimeType: binary ? "application/octet-stream" : getMimeType(filePath) || "text/plain",
+    mimeType: binary
+      ? "application/octet-stream"
+      : getMimeType(filePath) || "text/plain",
     isBinary: binary,
   }
 
@@ -177,7 +179,9 @@ export async function collectMetadata(
 
       if (opts.lineCount) {
         // Count non-empty lines
-        metadata.lineCount = textContent.split("\n").filter((line) => line.length > 0).length
+        metadata.lineCount = textContent
+          .split("\n")
+          .filter((line) => line.length > 0).length
       }
 
       if (opts.charCount) {
@@ -187,42 +191,4 @@ export async function collectMetadata(
   }
 
   return metadata
-}
-
-/**
- * Batch metadata collection with concurrency control
- *
- * @param filePaths - Array of file paths
- * @param options - Collection options
- * @param concurrency - Max concurrent operations (default: 5)
- * @returns Map of file paths to their metadata
- */
-export async function collectMetadataBatch(
-  filePaths: string[],
-  options: MetadataCollectionOptions = {},
-  concurrency: number = 5
-): Promise<Map<string, ExtendedFileMetadata>> {
-  const results = new Map<string, ExtendedFileMetadata>()
-
-  for (let i = 0; i < filePaths.length; i += concurrency) {
-    const batch = filePaths.slice(i, i + concurrency)
-    const batchResults = await Promise.all(
-      batch.map(async (path) => {
-        try {
-          const metadata = await collectMetadata(path, options)
-          return { path, metadata, error: null }
-        } catch (error) {
-          return { path, metadata: null, error }
-        }
-      })
-    )
-
-    for (const result of batchResults) {
-      if (result.metadata) {
-        results.set(result.path, result.metadata)
-      }
-    }
-  }
-
-  return results
 }

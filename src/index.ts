@@ -18,8 +18,13 @@ import {
   formatBatchResults,
   formatErrorResponse,
 } from "./utils/responseFormat.js"
-import { createOrderedBatches } from "./utils/dependencyOrder.js"
+import {
+  createOrderedBatches,
+  validateDependsOnReferences,
+} from "./utils/dependencyOrder.js"
 import { getErrorMessageFromHpcResponse } from "./utils/errorMapper.js"
+import { resolveResultReferences } from "./utils/resultResolver.js"
+import { resolveTemplates } from "./utils/templateResolver.js"
 
 // Internal imports - providers
 import { createProvider } from "./providers/factory.js"
@@ -225,7 +230,7 @@ class ConnectionManager {
 }
 
 class BatchExecutor {
-  constructor(private connectionManager: ConnectionManager) { }
+  constructor(private connectionManager: ConnectionManager) {}
 
   async executeBatch(
     identity: ServerIdentity,
@@ -241,6 +246,12 @@ class BatchExecutor {
       onProgress?: (completed: number, total: number) => Promise<void>
     }
   ): Promise<OperationResult[]> {
+    // Clear stale results from previous batches
+    resultsCache.clear()
+
+    // Validate that all dependsOn references point to known operation IDs
+    validateDependsOnReferences(operations)
+
     const connection =
       await this.connectionManager.getOrCreateConnection(identity)
 
@@ -254,19 +265,32 @@ class BatchExecutor {
           break
         }
 
-        const batchResults = await Promise.all(
-          batch.map((op) =>
-            this.executeOperation(connection, op, options.timeoutMs, context?.signal)
+        // Execute in chunks to respect maxConcurrent
+        for (let i = 0; i < batch.length; i += options.maxConcurrent) {
+          if (context?.signal?.aborted) break
+
+          const chunk = batch.slice(i, i + options.maxConcurrent)
+          const chunkResults = await Promise.all(
+            chunk.map((op) =>
+              this.executeOperation(
+                connection,
+                op,
+                options.timeoutMs,
+                context?.signal
+              )
+            )
           )
-        )
-        results.push(...batchResults)
+          results.push(...chunkResults)
+
+          if (options.stopOnError && chunkResults.some((r) => !r.success)) break
+        }
 
         // Emit progress after each completed layer
         if (context?.onProgress) {
           await context.onProgress(results.length, operations.length)
         }
 
-        if (options.stopOnError && batchResults.some((r) => !r.success)) {
+        if (options.stopOnError && results.some((r) => !r.success)) {
           break
         }
       }
@@ -300,25 +324,33 @@ class BatchExecutor {
     }
 
     try {
+      // Resolve result references (${results.id}) and Handlebars templates
+      // before passing arguments to the provider/transport
+      const resolvedArgs = resolveResultReferences(operation.arguments || {})
+      const templatedArgs = resolveTemplates(resolvedArgs)
+
       let result: unknown
 
       // Build race targets: timeout + optional cancellation signal
       let timeoutHandle: NodeJS.Timeout
       const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(
-          () => reject(new McpError(ErrorCode.RequestTimeout, "Operation timed out")),
+          () =>
+            reject(
+              new McpError(ErrorCode.RequestTimeout, "Operation timed out")
+            ),
           timeoutMs
         )
       })
 
       const abortPromise = signal
         ? new Promise<never>((_, reject) => {
-          signal.addEventListener(
-            "abort",
-            () => reject(new Error("Operation cancelled")),
-            { once: true }
-          )
-        })
+            signal.addEventListener(
+              "abort",
+              () => reject(new Error("Operation cancelled")),
+              { once: true }
+            )
+          })
         : null
 
       const raceTargets: Promise<never>[] = abortPromise
@@ -330,10 +362,7 @@ class BatchExecutor {
           // Use provider for execution with recovery
           result = await withRecovery(async () => {
             return Promise.race([
-              connection.provider.executeTool(
-                operation.tool,
-                operation.arguments
-              ),
+              connection.provider.executeTool(operation.tool, templatedArgs),
               ...raceTargets,
             ])
           })
@@ -343,7 +372,7 @@ class BatchExecutor {
             return Promise.race([
               connection.client.callTool({
                 name: operation.tool,
-                arguments: operation.arguments,
+                arguments: templatedArgs,
               }),
               ...raceTargets,
             ])
@@ -407,7 +436,7 @@ Key features:
 - Error recovery: transient failures are automatically retried via withRecovery
 
 Options (all optional):
-- maxConcurrent (default 5): max parallel operations per dependency layer
+- maxConcurrent (default 10): max parallel operations per dependency layer
 - timeoutMs (default 30000): per-operation timeout in milliseconds
 - stopOnError (default false): halt the batch on the first failure
 - keepAlive (default false): keep the target server connection open after the batch
@@ -460,13 +489,15 @@ const batchTool = server.tool(
         totalOperations: operations.length,
         succeeded: results.filter((r) => r.success).length,
         failed: results.filter((r) => !r.success).length,
-        results: results.map(({ tool, success, result, error, durationMs }) => ({
-          tool,
-          success,
-          ...(result !== undefined && { result }),
-          ...(error !== undefined && { error }),
-          durationMs,
-        })),
+        results: results.map(
+          ({ tool, success, result, error, durationMs }) => ({
+            tool,
+            success,
+            ...(result !== undefined && { result }),
+            ...(error !== undefined && { error }),
+            durationMs,
+          })
+        ),
       }
 
       return {
@@ -484,9 +515,9 @@ const batchTool = server.tool(
 // Clients SHOULD surface these hints to users before invoking.
 batchTool.update({
   annotations: {
-    destructiveHint: true,   // batch can write, overwrite, or delete files
-    openWorldHint: true,     // connects to arbitrary external MCP servers
-    idempotentHint: false,   // repeated calls produce different side-effects
+    destructiveHint: true, // batch can write, overwrite, or delete files
+    openWorldHint: true, // connects to arbitrary external MCP servers
+    idempotentHint: false, // repeated calls produce different side-effects
   },
 })
 
@@ -507,7 +538,13 @@ server.resource(
             $schema: "http://json-schema.org/draft-07/schema#",
             title: "batch_execute structuredContent output",
             type: "object",
-            required: ["serverName", "totalOperations", "succeeded", "failed", "results"],
+            required: [
+              "serverName",
+              "totalOperations",
+              "succeeded",
+              "failed",
+              "results",
+            ],
             properties: {
               serverName: {
                 type: "string",
@@ -522,11 +559,23 @@ server.resource(
                   type: "object",
                   required: ["tool", "success", "durationMs"],
                   properties: {
-                    tool: { type: "string", description: "Tool name that was invoked" },
+                    tool: {
+                      type: "string",
+                      description: "Tool name that was invoked",
+                    },
                     success: { type: "boolean" },
-                    result: { description: "Tool output — present on success, shape depends on the target tool" },
-                    error: { type: "string", description: "Error message — present on failure" },
-                    durationMs: { type: "number", description: "Wall-clock time for this operation" },
+                    result: {
+                      description:
+                        "Tool output — present on success, shape depends on the target tool",
+                    },
+                    error: {
+                      type: "string",
+                      description: "Error message — present on failure",
+                    },
+                    durationMs: {
+                      type: "number",
+                      description: "Wall-clock time for this operation",
+                    },
                   },
                 },
               },

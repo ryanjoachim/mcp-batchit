@@ -1,15 +1,15 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
 import { resultsCache } from "./resultsCache.js"
 import { TemplateCache } from "./templateCache.js"
-import { registerBuiltInHelpers, registerHelper, unregisterHelper, listHelpers } from "./templateHelpers.js"
 import { validateTemplate, type ValidationResult } from "./templateValidator.js"
 import { hbs } from "./handlebarsInstance.js"
+// Ensure built-in helpers are registered at module load time
+import "./templateHelpers.js"
 
 /**
  * Cache of precompiled Handlebars templates for improved performance.
- * Uses LRU eviction with configurable max size.
  */
-const templateCache = new TemplateCache({ enableMetrics: true })
+const templateCache = new TemplateCache()
 
 /**
  * Configuration for template resolution
@@ -26,7 +26,9 @@ let globalConfig: ResolveTemplatesConfig = {
 /**
  * Configure template resolution behavior
  */
-export function configureTemplateResolution(config: ResolveTemplatesConfig): void {
+export function configureTemplateResolution(
+  config: ResolveTemplatesConfig
+): void {
   globalConfig = { ...globalConfig, ...config }
 }
 
@@ -36,13 +38,6 @@ export function configureTemplateResolution(config: ResolveTemplatesConfig): voi
  */
 export function clearTemplateCache(): void {
   templateCache.clear()
-}
-
-/**
- * Get current cache metrics
- */
-export function getTemplateCacheMetrics() {
-  return templateCache.getMetrics()
 }
 
 // Register existing helpers only if not already present
@@ -65,18 +60,12 @@ if (!hbs.helpers["now"]) {
 }
 
 // Register all built-in helpers from templateHelpers
-registerBuiltInHelpers()
-
-// Re-export helpers API for external use
-export { registerHelper, unregisterHelper, listHelpers }
+// Helpers are registered at module load time via templateHelpers.ts
 
 /**
  * Enhances a template error with line number and snippet context
  */
-export function enhanceTemplateError(
-  error: Error,
-  template: string
-): McpError {
+export function enhanceTemplateError(error: Error, template: string): McpError {
   const errorMessage = error.message
 
   // Try to extract line number from error message
@@ -135,8 +124,13 @@ export function resolveTemplates(
     const validationResult: ValidationResult = validateTemplate(templateStr)
     if (!validationResult.valid) {
       const firstError = validationResult.errors[0]
-      const errorMessage = firstError.message + (firstError.line ? ` at line ${firstError.line}` : "")
-      throw new McpError(ErrorCode.InvalidParams, `Template validation error: ${errorMessage}`)
+      const errorMessage =
+        firstError.message +
+        (firstError.line ? ` at line ${firstError.line}` : "")
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `Template validation error: ${errorMessage}`
+      )
     }
   }
 

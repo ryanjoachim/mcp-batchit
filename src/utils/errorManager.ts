@@ -6,17 +6,6 @@ import { mapToMcpError } from "./errorMapper.js"
  */
 export class ErrorManager {
   /**
-   * Formats a standardized error message for filesystem operations
-   */
-  static formatFileError(
-    operation: string,
-    path: string,
-    error: string
-  ): string {
-    return `Failed to ${operation} ${path}: ${error}`
-  }
-
-  /**
    * Formats a standardized error message for validation failures
    */
   static formatValidationError(context: string, reason: string): string {
@@ -64,16 +53,6 @@ export class ErrorManager {
   }
 
   /**
-   * Creates a standardized timeout error
-   */
-  static createTimeoutError(operation: string, details?: string): McpError {
-    const message = details
-      ? `${operation} timed out: ${details}`
-      : `${operation} timed out`
-    return new McpError(ErrorCode.RequestTimeout, message)
-  }
-
-  /**
    * Enhances an existing McpError with additional context
    */
   static enhanceError(
@@ -110,19 +89,6 @@ export class ErrorManager {
       ErrorCode.InvalidParams,
       this.formatValidationError("path", `${path} (${reason})`)
     )
-  }
-
-  /**
-   * Creates a standardized error for unsupported operations
-   */
-  static createUnsupportedOperationError(
-    operation: string,
-    details?: string
-  ): McpError {
-    const message = details
-      ? `Operation not supported: ${operation} (${details})`
-      : `Operation not supported: ${operation}`
-    return new McpError(ErrorCode.MethodNotFound, message)
   }
 
   /**

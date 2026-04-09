@@ -13,6 +13,10 @@ import { PathOptions } from "../types/filesystem/paths.js"
 
 import { LineDiffOperation, applyLineDiff } from "./lineDiff.js"
 import { ErrorManager } from "../utils/errorManager.js"
+import { createDirectory, listDirectory } from "./directoryOperations.js"
+import { searchFiles, SearchOptions } from "./searchFiles.js"
+import { getFileInfo, FileInfo } from "./fileInfo.js"
+import { directoryTree } from "./directoryTree.js"
 
 // Import new types from the filesystem type system
 import { UpdateOperation } from "../types/filesystem/operations.js"
@@ -496,6 +500,50 @@ export class FileSystem {
         `Failed in recursive copy from ${src} to ${dest}`
       )
     }
+  }
+
+  /**
+   * Create directories, including parent directories if needed
+   */
+  async createDirectory(dirPath: string | string[]): Promise<string> {
+    await createDirectory(dirPath, this.config)
+    return Array.isArray(dirPath)
+      ? dirPath.map((p) => `Created: ${p}`).join("\n")
+      : `Created: ${dirPath}`
+  }
+
+  /**
+   * List contents of a directory
+   */
+  async listDirectory(dirPath: string): Promise<string> {
+    return listDirectory(dirPath, this.config)
+  }
+
+  /**
+   * Search for files matching a pattern
+   */
+  async searchFiles(
+    directory: string,
+    options: SearchOptions
+  ): Promise<unknown> {
+    return searchFiles(directory, options, this.config.rootDirectory)
+  }
+
+  /**
+   * Get detailed information about a file or directory
+   */
+  async getFileInfo(filePath: string): Promise<FileInfo> {
+    return getFileInfo(filePath, this.config.rootDirectory)
+  }
+
+  /**
+   * Get a recursive tree structure of a directory
+   */
+  async directoryTree(
+    dirPath: string,
+    format: "json" | "text" = "json"
+  ): Promise<string> {
+    return directoryTree(dirPath, this.config.rootDirectory, format)
   }
 
   /**

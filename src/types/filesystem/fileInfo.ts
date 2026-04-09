@@ -136,28 +136,3 @@ export interface SymlinkInfo extends BaseFileInfo, FileStats {
  * Union type of all filesystem entry information.
  */
 export type FSEntryInfo = FileInfo | DirectoryInfo | SymlinkInfo
-
-/**
- * Options for generating image previews/thumbnails
- */
-export interface PreviewOptions {
-  /**
-   * Maximum width of the preview in pixels
-   */
-  maxWidth?: number
-
-  /**
-   * Maximum height of the preview in pixels
-   */
-  maxHeight?: number
-
-  /**
-   * Output format for the preview
-   */
-  format?: "jpeg" | "png" | "webp"
-
-  /**
-   * Quality level for the preview (1-100)
-   */
-  quality?: number
-}

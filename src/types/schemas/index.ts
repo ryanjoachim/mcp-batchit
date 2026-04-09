@@ -6,7 +6,6 @@ export * from "./batch.js"
 // Export common type combinations
 import { ServerType } from "./serverType.js"
 import { TransportConfig } from "./transport.js"
-import { Operation, BatchOptions } from "./batch.js"
 
 /**
  * Server identity combining server type and transport
@@ -16,14 +15,6 @@ export interface ServerIdentity {
   serverType: ServerType
   transport?: TransportConfig
   maxIdleTimeMs?: number
-}
-
-/**
- * Context for batch execution
- */
-export interface BatchExecutionContext {
-  operations: Operation[]
-  options: BatchOptions
 }
 
 /**
