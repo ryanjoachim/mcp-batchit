@@ -8,7 +8,6 @@
 import fs from "fs/promises"
 import path from "path"
 import { isBinaryFile } from "isbinaryfile"
-import { FileSystem } from "./FileSystem.js"
 import { getMimeType } from "./fileTypeHandlers.js"
 import { generateDiff } from "./diffGenerator.js"
 import { collectMetadata } from "./metadataCollector.js"
@@ -77,11 +76,6 @@ export async function trackContentModification(
       return modification
     }
 
-    const fileSystem = new FileSystem({
-      rootDirectory,
-      excludedDirs: [], // Explicitly provide empty excludedDirs for clarity
-    })
-
     try {
       const stats = await fs.stat(normalized)
 
@@ -118,10 +112,8 @@ export async function trackContentModification(
         operation === "update" &&
         oldContent !== undefined
       ) {
-        // Read the new content from file
-        const newContent = await fileSystem.readFile(normalized, {
-          checkBinary: false,
-        })
+        // Read the new content directly from disk
+        const newContent = await fs.readFile(normalized, "utf-8")
 
         // Generate diff in-memory (no temp files)
         const diffResult = await generateDiff(oldContent, newContent, {

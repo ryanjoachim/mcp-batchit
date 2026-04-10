@@ -13,11 +13,12 @@ export interface Provider {
 
 export function createProvider(
   type: ProviderType,
-  rootDirectory: string
+  rootDirectory: string,
+  existingFs?: FileSystem
 ): Provider {
   switch (type) {
     case "batchit-internal":
-      return createInternalFilesystemProvider(rootDirectory)
+      return createInternalFilesystemProvider(rootDirectory, existingFs)
 
     case "external":
       throw new McpError(
@@ -33,11 +34,16 @@ export function createProvider(
   }
 }
 
-function createInternalFilesystemProvider(rootDirectory: string): Provider {
-  const fs = new FileSystem({
-    rootDirectory,
-    maxConcurrent: 10, // Default concurrent operations limit
-  })
+function createInternalFilesystemProvider(
+  rootDirectory: string,
+  existingFs?: FileSystem
+): Provider {
+  const fs =
+    existingFs ??
+    new FileSystem({
+      rootDirectory,
+      maxConcurrent: 10, // Default concurrent operations limit
+    })
 
   return {
     async executeTool(name: string, args: unknown): Promise<unknown> {

@@ -60,6 +60,24 @@ export function validateWebSocketUrl(url: string): void {
 }
 
 /**
+ * Validates a StreamableHTTP URL format
+ */
+export function validateStreamableHttpUrl(url: string): void {
+  try {
+    const parsedUrl = new URL(url)
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        "StreamableHTTP URL must use http:// or https:// protocol"
+      )
+    }
+  } catch (error) {
+    if (error instanceof McpError) throw error
+    throw new McpError(ErrorCode.InvalidParams, "Invalid StreamableHTTP URL")
+  }
+}
+
+/**
  * Validates transport configuration and throws McpError if invalid
  */
 export function validateTransport(transport: TransportConfig): void {
@@ -73,6 +91,8 @@ export function validateTransport(transport: TransportConfig): void {
     validateStdioCommand(transport.command, transport.args)
   } else if (transport.type === "websocket") {
     validateWebSocketUrl(transport.url)
+  } else if (transport.type === "streamable-http") {
+    validateStreamableHttpUrl(transport.url)
   }
 }
 

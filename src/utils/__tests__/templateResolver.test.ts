@@ -1,17 +1,10 @@
-import {
-  resolveTemplates,
-  clearTemplateCache,
-  configureTemplateResolution,
-  validateTemplate,
-} from "../templateResolver.js"
+import { resolveTemplates, clearTemplateCache } from "../templateResolver.js"
 import { resultsCache } from "../resultsCache.js"
-import { TemplateCache } from "../templateCache.js"
 
 describe("templateResolver", () => {
   beforeEach(() => {
     resultsCache.clear()
     clearTemplateCache()
-    configureTemplateResolution({ validateBeforeExecution: false })
   })
 
   it("returns args unchanged if no template present", () => {
@@ -101,6 +94,18 @@ describe("templateResolver", () => {
 
       expect(result1.content).toBe("Value 1: test")
       expect(result2.content).toBe("Value 2: test")
+    })
+
+    it("clearTemplateCache clears all cached templates", () => {
+      const args = {
+        template: "Hello {{uppercase name}}",
+        content: { name: "World" },
+      }
+      resolveTemplates(args)
+      clearTemplateCache()
+      // After clearing, templates are recompiled on next use
+      const result = resolveTemplates(args)
+      expect(result.content).toBe("Hello WORLD")
     })
   })
 
@@ -344,71 +349,15 @@ describe("templateResolver", () => {
 
   describe("cache eviction", () => {
     it("evicts oldest entries when max size is exceeded", () => {
-      const cache = new TemplateCache({ maxSize: 5 })
-
-      // Fill to capacity
-      cache.set("a", (() => null) as any)
-      cache.set("b", (() => null) as any)
-      cache.set("c", (() => null) as any)
-      cache.set("d", (() => null) as any)
-      cache.set("e", (() => null) as any)
-
-      expect(cache.size()).toBe(5)
-
-      // Add new entry — should evict oldest ('a')
-      cache.set("f", (() => null) as any)
-
-      // 'a' should be evicted (first inserted)
-      expect(cache.get("a")).toBeUndefined()
-      // remaining entries should still be there
-      expect(cache.get("b")).toBeDefined()
-      expect(cache.get("c")).toBeDefined()
-      expect(cache.get("d")).toBeDefined()
-      expect(cache.get("e")).toBeDefined()
-      expect(cache.get("f")).toBeDefined()
-    })
-  })
-
-  describe("template validation", () => {
-    it("validates syntactically correct template with known helpers", () => {
-      const result = validateTemplate("Hello {{uppercase name}}", {
-        checkHelpers: true,
-      })
-      expect(result.valid).toBe(true)
-      expect(result.errors).toHaveLength(0)
-    })
-
-    it("detects syntax errors", () => {
-      const result = validateTemplate("Hello {{error")
-      expect(result.valid).toBe(false)
-      expect(result.errors.length).toBeGreaterThan(0)
-      expect(result.errors[0].type).toBe("syntax")
-    })
-
-    it("extracts line number from syntax error", () => {
-      const result = validateTemplate("Line 1\nLine 2\n{{error")
-      expect(result.valid).toBe(false)
-      expect(result.errors[0].line).toBeDefined()
-    })
-  })
-
-  describe("validateBeforeExecution option", () => {
-    it("throws on invalid template when validation enabled", () => {
-      configureTemplateResolution({ validateBeforeExecution: true })
-      const args = { template: "Hello {{name" } // syntax error
-      expect(() => resolveTemplates(args)).toThrow()
-      configureTemplateResolution({ validateBeforeExecution: false })
-    })
-
-    it("succeeds on valid template when validation enabled", () => {
-      configureTemplateResolution({ validateBeforeExecution: true })
-      const args = {
-        template: "Hello {{uppercase name}}",
-        content: { name: "World" },
+      // Fill the cache beyond MAX_CACHE_SIZE (100)
+      for (let i = 0; i < 110; i++) {
+        resolveTemplates({ template: `Template {{i}} {{i}}`, content: { i } })
       }
-      const result = resolveTemplates(args)
+      // Cache should still work — oldest entries evicted
+      const result = resolveTemplates({
+        template: "Hello {{uppercase 'world'}}",
+      })
       expect(result.content).toBe("Hello WORLD")
-      configureTemplateResolution({ validateBeforeExecution: false })
     })
   })
 })

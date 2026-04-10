@@ -1,144 +1,80 @@
 # MCP BatchIt
 
-A batch execution server that lets AI agents run multiple tool calls in a single request.
+A high-performance MCP filesystem server with batch execution capabilities.
+
+## What It Does
+
+- **12 individual filesystem tools** — `read_file`, `write_file`, `update_file`, and more, each with proper tool annotations so agents know which are safe vs destructive
+- **Batch execution** — Run multi-step workflows with dependency ordering and result chaining in a single `batch_execute` call
+- **External MCP proxy** — Connect to and orchestrate calls to other MCP servers via stdio, WebSocket, or StreamableHTTP transport
 
 ## Why BatchIt?
 
-AI agents typically work in a "one tool, one turn" loop — each tool call is a separate round-trip. This adds latency and token overhead for multi-step tasks. BatchIt lets you execute complex workflows in a single request.
+The real value is **dependency ordering and result chaining**:
 
-**Without BatchIt:** 5 tool calls = 5 round-trips = slower execution  
-**With BatchIt:** 5 tool calls = 1 request = faster execution
+- **Dependency ordering**: Define which operations must complete before others start. Independent operations run in parallel.
+- **Result chaining**: Reference prior operation outputs with `${results.id}` syntax. No manual copy-paste between tool calls.
 
-## What You Can Do
+For example: read a config, transform it, and write the result — all in one request with automatic data flow.
 
-### Chain Results Across Operations
+## Individual Tools
 
-Instead of copying output from one tool into the next, reference it directly:
+For simple, single-step operations, call any tool directly:
 
-```json
-{
-  "operations": [
-    { "id": "config", "tool": "read_file", "arguments": { "path": "/project/config.json" } },
-    {
-      "id": "report",
-      "tool": "write_file",
-      "dependsOn": ["config"],
-      "arguments": {
-        "path": "/project/output.txt",
-        "template": "Version: {{json results.config}}"
-      }
-    }
-  ]
-}
-```
+| Tool | Description | Annotations |
+|------|-------------|-------------|
+| `read_file` | Read file content (supports PDF/DOCX extraction) | Read-only, idempotent |
+| `read_files` | Batch read multiple files concurrently | Read-only, idempotent |
+| `write_file` | Create or overwrite a file | Destructive |
+| `update_file` | Modify file with `overwrite`, `append`, or `diff` mode | Destructive |
+| `move_file` | Move or rename file | Destructive, idempotent |
+| `copy_file` | Copy a file | Idempotent |
+| `delete_file` | Delete a file | Destructive |
+| `list_directory` | List directory contents | Read-only, idempotent |
+| `create_directory` | Create directories (including parents) | Idempotent |
+| `search_files` | Search files by glob, regex, or content | Read-only, idempotent |
+| `get_file_info` | Get file/directory metadata (size, dates, permissions) | Read-only, idempotent |
+| `directory_tree` | Get recursive directory tree (JSON or text) | Read-only, idempotent |
 
-### Parallel Execution
+## Batch Execution
 
-Independent operations run concurrently. Reading 10 files in one request:
-
-```json
-{
-  "operations": [
-    { "id": "file1", "tool": "read_file", "arguments": { "path": "/project/src/a.js" } },
-    { "id": "file2", "tool": "read_file", "arguments": { "path": "/project/src/b.js" } },
-    { "id": "file3", "tool": "read_file", "arguments": { "path": "/project/src/c.js" } },
-    { "id": "file4", "tool": "read_file", "arguments": { "path": "/project/src/d.js" } },
-    { "id": "file5", "tool": "read_file", "arguments": { "path": "/project/src/e.js" } }
-  ]
-}
-```
-
-These 5 reads execute in parallel in a single batch.
+For multi-step workflows, use `batch_execute`. Operations can reference each other's results and declare dependencies.
 
 ### Dependency Ordering
 
-Operations with `dependsOn` wait until their dependencies finish:
-
-```json
-{
-  "operations": [
-    { "id": "fetch", "tool": "read_file", "arguments": { "path": "/data/source.json" } },
-    {
-      "id": "process",
-      "tool": "write_file",
-      "dependsOn": ["fetch"],
-      "arguments": {
-        "path": "/data/processed.txt",
-        "template": "Processed: {{uppercase results.fetch.content}}"
-      }
-    },
-    {
-      "id": "backup",
-      "tool": "write_file",
-      "dependsOn": ["fetch"],
-      "arguments": {
-        "path": "/backup/source_backup.txt",
-        "content": "${results.fetch}"
-      }
-    }
-  ]
-}
-```
-
-`process` and `backup` both depend on `fetch`, so they run in parallel after `fetch` completes.
-
-## Usage
-
-You call the `batch_execute` tool with your target server and operations array.
-
-### Internal Filesystem Example
-
-Read multiple files, transform the content, and write a combined output:
+Operations with `dependsOn` wait until their dependencies finish. Independent operations run in parallel:
 
 ```json
 {
   "targetServer": {
     "name": "project",
-    "serverType": {
-      "type": "filesystem",
-      "config": {
-        "rootDirectory": "/path/to/project",
-        "provider": "batchit-internal"
-      }
-    }
+    "serverType": { "type": "filesystem", "config": { "rootDirectory": "/project", "provider": "batchit-internal" } }
   },
   "operations": [
-    { "id": "read_src", "tool": "read_file", "arguments": { "path": "/path/to/project/src/index.js" } },
-    { "id": "read_test", "tool": "read_file", "arguments": { "path": "/path/to/project/test/index.test.js" } },
-    {
-      "id": "write_combined",
-      "tool": "write_file",
-      "dependsOn": ["read_src", "read_test"],
-      "arguments": {
-        "path": "/path/to/project/combined.txt",
-        "template": "SOURCE:\n{{json results.read_src}}\n\nTESTS:\n{{json results.read_test}}"
-      }
-    }
+    { "id": "fetch", "tool": "read_file", "arguments": { "path": "/project/config.json" } },
+    { "id": "transform", "tool": "write_file", "dependsOn": ["fetch"], "arguments": {
+      "path": "/project/output.txt",
+      "template": "Config: {{json results.fetch}}"
+    }},
+    { "id": "backup", "tool": "copy_file", "dependsOn": ["fetch"], "arguments": {
+      "sourcePath": "/project/config.json", "destPath": "/project/config.bak"
+    }}
   ],
-  "options": {
-    "maxConcurrent": 10,
-    "timeoutMs": 30000,
-    "stopOnError": false,
-    "keepAlive": false
-  }
+  "options": { "maxConcurrent": 10, "timeoutMs": 30000, "stopOnError": false, "keepAlive": false }
 }
 ```
 
+`transform` and `backup` both depend on `fetch`, so they run in parallel after `fetch` completes.
+
 ### External MCP Server Example
 
-Orchestrate calls to any MCP server (filesystem, git, memory, etc.):
+Orchestrate calls to any MCP server:
 
 ```json
 {
   "targetServer": {
     "name": "filesystem",
-    "serverType": {
-      "type": "filesystem",
-      "config": {
-        "rootDirectory": "/tmp",
-        "provider": "external"
-      }
-    },
+    "serverType": { "type": "filesystem", "config": { "rootDirectory": "/tmp", "provider": "external" } },
     "transport": {
       "type": "stdio",
       "command": "npx",
@@ -149,18 +85,24 @@ Orchestrate calls to any MCP server (filesystem, git, memory, etc.):
     { "id": "list", "tool": "list_directory", "arguments": { "path": "/tmp" } },
     { "id": "read", "tool": "read_file", "dependsOn": ["list"], "arguments": { "path": "/tmp/notes.txt" } }
   ],
-  "options": {
-    "maxConcurrent": 10,
-    "timeoutMs": 30000,
-    "stopOnError": false,
-    "keepAlive": false
+  "options": { "maxConcurrent": 10, "timeoutMs": 30000 }
+}
+```
+
+StreamableHTTP transport is also supported:
+
+```json
+{
+  "transport": {
+    "type": "streamable-http",
+    "url": "http://localhost:8080/mcp"
   }
 }
 ```
 
 ## Result Chaining Syntax
 
-There are two syntaxes for referencing operation results:
+Two syntaxes for referencing operation results in `batch_execute`:
 
 **`${results.<id>}`** — Result references (resolved first, works in any argument value):
 
@@ -204,25 +146,6 @@ Built-in Handlebars helpers for manipulating values in templates:
 | `timeoutMs` | 30000 | Per-operation timeout |
 | `stopOnError` | false | Stop batch on first failure |
 | `keepAlive` | false | Keep connection open after batch |
-
-## Internal Provider Tools
-
-When using `provider: "batchit-internal"`:
-
-| Tool | Description |
-|------|-------------|
-| `read_file` | Read file content (supports PDF/DOCX extraction) |
-| `read_files` | Batch read multiple files concurrently |
-| `write_file` | Create or overwrite file with optional template |
-| `update_file` | Modify file with `overwrite`, `append`, or `diff` mode |
-| `move_file` | Move or rename file |
-| `copy_file` | Copy file or directory |
-| `delete_file` | Delete file |
-| `list_directory` | List contents of a directory |
-| `create_directory` | Create directories (including parent directories) |
-| `search_files` | Search for files by glob pattern, regex, or content |
-| `get_file_info` | Get detailed file/directory metadata (size, dates, permissions) |
-| `directory_tree` | Get recursive directory tree structure (JSON or text) |
 
 ## Setup
 

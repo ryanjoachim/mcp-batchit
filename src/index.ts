@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { WebSocketClientTransport } from "@modelcontextprotocol/sdk/client/websocket.js"
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 
 // Internal imports - utils
 import {
@@ -28,6 +29,9 @@ import { resolveTemplates } from "./utils/templateResolver.js"
 
 // Internal imports - providers
 import { createProvider } from "./providers/factory.js"
+// Internal imports - filesystem tools
+import { registerFilesystemTools } from "./tools/filesystemTools.js"
+import { FileSystem } from "./filesystem/FileSystem.js"
 // Internal imports - types
 import {
   BatchArgsSchema,
@@ -42,6 +46,7 @@ import {
 // Internal imports - connections
 import {
   ServerConnection,
+  ClientTransport,
   createTransportConnection,
   createProviderConnection,
   isTransportConnection,
@@ -55,6 +60,11 @@ const VERSION = "1.2.1"
 class ConnectionManager {
   private connections = new Map<string, ServerConnection>()
   private cleanupIntervals = new Map<string, NodeJS.Timeout>()
+  private defaultFileSystem: FileSystem
+
+  constructor(defaultFileSystem: FileSystem) {
+    this.defaultFileSystem = defaultFileSystem
+  }
 
   createKeyForIdentity(identity: ServerIdentity): string {
     return JSON.stringify({
@@ -80,9 +90,15 @@ class ConnectionManager {
       identity.serverType.type === "filesystem" &&
       identity.serverType.config.provider === "batchit-internal"
     ) {
+      const rootDirectory =
+        identity.serverType.config.rootDirectory || process.cwd()
       const provider = createProvider(
         "batchit-internal",
-        identity.serverType.config.rootDirectory || process.cwd()
+        rootDirectory,
+        // Reuse the default filesystem when rootDirectory matches
+        rootDirectory === this.defaultFileSystem.rootDirectory
+          ? this.defaultFileSystem
+          : undefined
       )
 
       const connection = createProviderConnection(provider, identity)
@@ -122,7 +138,7 @@ class ConnectionManager {
 
   private async createTransport(
     config: TransportConfig
-  ): Promise<WebSocketClientTransport | StdioClientTransport> {
+  ): Promise<ClientTransport> {
     try {
       validateTransport(config)
 
@@ -142,6 +158,10 @@ class ConnectionManager {
               ? config.url
               : `ws://${config.url}`
           return new WebSocketClientTransport(new URL(wsUrl))
+        }
+
+        case "streamable-http": {
+          return new StreamableHTTPClientTransport(new URL(config.url))
         }
 
         default:
@@ -415,7 +435,8 @@ class BatchExecutor {
 }
 
 // Server Setup
-const connectionManager = new ConnectionManager()
+const defaultFileSystem = new FileSystem({ rootDirectory: process.cwd() })
+const connectionManager = new ConnectionManager(defaultFileSystem)
 const batchExecutor = new BatchExecutor(connectionManager)
 const server = new McpServer(
   {
@@ -520,6 +541,11 @@ batchTool.update({
     idempotentHint: false, // repeated calls produce different side-effects
   },
 })
+
+// Register 12 individual filesystem tools for direct access.
+// These provide tool discovery and per-tool annotations.
+// For multi-step workflows with dependency ordering and result chaining, use batch_execute.
+registerFilesystemTools(server, defaultFileSystem)
 
 // Expose the batch_execute output schema as a readable resource.
 // Resources are for data clients can inspect — a hand-written JSON Schema is

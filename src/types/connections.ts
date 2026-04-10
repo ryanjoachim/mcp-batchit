@@ -4,6 +4,15 @@ import { Provider } from "../providers/factory.js"
 import { ServerIdentity } from "./schemas/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { WebSocketClientTransport } from "@modelcontextprotocol/sdk/client/websocket.js"
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
+
+/**
+ * Union type for all supported MCP client transports
+ */
+export type ClientTransport =
+  | WebSocketClientTransport
+  | StdioClientTransport
+  | StreamableHTTPClientTransport
 
 /**
  * Base interface for all connection types
@@ -20,7 +29,7 @@ export interface BaseConnection {
 export interface TransportConnection extends BaseConnection {
   type: "transport"
   client: Client
-  transport: WebSocketClientTransport | StdioClientTransport
+  transport: ClientTransport
   childProcess?: ChildProcess
   provider?: never
 }
@@ -64,7 +73,7 @@ export function isProviderConnection(
  */
 export function createTransportConnection(
   client: Client,
-  transport: WebSocketClientTransport | StdioClientTransport,
+  transport: ClientTransport,
   identity: ServerIdentity,
   childProcess?: ChildProcess
 ): TransportConnection {

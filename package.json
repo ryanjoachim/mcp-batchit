@@ -1,7 +1,7 @@
 {
   "name": "mcp-batchit",
   "version": "1.2.1",
-  "description": "Batch multiple MCP tool calls into a single request—reducing overhead and token usage for AI agents",
+  "description": "MCP filesystem server with batch execution, dependency ordering, and result chaining",
   "main": "build/index.js",
   "type": "module",
   "types": "build/index.d.ts",

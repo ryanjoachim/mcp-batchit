@@ -27,9 +27,21 @@ export type WebSocketTransportConfig = BaseTransportConfig & {
 }
 
 /**
+ * Type for StreamableHTTP transport configuration
+ */
+export type StreamableHTTPTransportConfig = BaseTransportConfig & {
+  type: "streamable-http"
+  url: string
+  options?: Record<string, unknown>
+}
+
+/**
  * Union type for all transport configurations
  */
-export type TransportConfig = StdioTransportConfig | WebSocketTransportConfig
+export type TransportConfig =
+  | StdioTransportConfig
+  | WebSocketTransportConfig
+  | StreamableHTTPTransportConfig
 
 /**
  * Schema for stdio transport configuration
@@ -54,11 +66,26 @@ export const WebSocketTransportConfigSchema = z.object({
 })
 
 /**
+ * Schema for StreamableHTTP transport configuration
+ */
+export const StreamableHTTPTransportConfigSchema = z.object({
+  type: z.literal("streamable-http"),
+  url: z
+    .string()
+    .describe("HTTP URL for StreamableHTTP transport (http:// or https://)"),
+  options: z
+    .record(z.unknown())
+    .optional()
+    .describe("StreamableHTTP connection options"),
+})
+
+/**
  * Schema for transport configuration discriminated union
  */
 export const TransportConfigSchema = z
   .discriminatedUnion("type", [
     StdioTransportConfigSchema,
     WebSocketTransportConfigSchema,
+    StreamableHTTPTransportConfigSchema,
   ])
   .describe("Transport configuration (required for external providers)")

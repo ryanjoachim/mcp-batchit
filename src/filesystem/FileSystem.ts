@@ -90,6 +90,11 @@ export class FileSystem {
   private readonly config: PathOptions
   private readonly maxConcurrent: number
 
+  /** The root directory this FileSystem instance operates within. */
+  get rootDirectory(): string {
+    return this.config.rootDirectory
+  }
+
   constructor(options: FileSystemOptions) {
     // Set PathOptions properties
     this.config = {
