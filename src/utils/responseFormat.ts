@@ -1,5 +1,6 @@
 import { OperationResult } from "../types/schemas/batch.js"
 import { McpError } from "@modelcontextprotocol/sdk/types.js"
+import { ErrorManager } from "./errorManager.js"
 
 type TextContent = {
   type: "text"
@@ -78,19 +79,15 @@ export function formatErrorResponse(error: unknown): McpResponse {
   const mcpError =
     error instanceof McpError
       ? error
-      : new McpError(
-          1,
-          error instanceof Error ? error.message : String(error),
-          {
-            originalError: error,
-            ...(error instanceof Error
-              ? {
-                  stack: error.stack,
-                  name: error.name,
-                }
-              : {}),
-          }
-        )
+      : new McpError(1, ErrorManager.getErrorMessage(error), {
+          originalError: error,
+          ...(error instanceof Error
+            ? {
+                stack: error.stack,
+                name: error.name,
+              }
+            : {}),
+        })
 
   const textContent: TextContent = {
     type: "text",

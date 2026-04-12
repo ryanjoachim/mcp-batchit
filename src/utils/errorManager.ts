@@ -103,4 +103,12 @@ export class ErrorManager {
       : `Missing required parameter: ${paramName}`
     return new McpError(ErrorCode.InvalidParams, message)
   }
+
+  /**
+   * Extracts a safe error message from an unknown error value.
+   * Centralizes the `error instanceof Error ? error.message : String(error)` pattern.
+   */
+  static getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error)
+  }
 }

@@ -2,6 +2,8 @@ import fs from "fs/promises"
 import path from "path"
 import { ErrorManager } from "../utils/errorManager.js"
 import { getMimeType } from "./fileTypeHandlers.js"
+import { validatePathWithSymlinks } from "./pathValidation.js"
+import { PathOptions } from "../types/filesystem/paths.js"
 
 /**
  * Represents detailed information about a file or directory
@@ -23,32 +25,11 @@ export interface FileInfo {
  */
 export async function getFileInfo(
   filePath: string,
-  rootDirectory: string
+  config: PathOptions
 ): Promise<FileInfo> {
   try {
-    // Basic path validation
-    if (!path.isAbsolute(filePath)) {
-      throw ErrorManager.createPathValidationError(
-        filePath,
-        "Must be absolute path"
-      )
-    }
-
-    const normalized = path.normalize(filePath)
-
-    if (normalized.includes("..")) {
-      throw ErrorManager.createPathValidationError(
-        normalized,
-        "Cannot contain parent directory references (..)"
-      )
-    }
-
-    if (!normalized.startsWith(path.normalize(rootDirectory))) {
-      throw ErrorManager.createPathValidationError(
-        normalized,
-        `Must be within root directory ${rootDirectory}`
-      )
-    }
+    const validResult = await validatePathWithSymlinks(filePath, config)
+    const normalized = validResult.normalizedPath
 
     // Ensure path exists
     try {

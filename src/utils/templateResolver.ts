@@ -1,6 +1,7 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
-import { resultsCache } from "./resultsCache.js"
+import { ResultsCache } from "./resultsCache.js"
 import { hbs } from "./handlebarsInstance.js"
+import { ErrorManager } from "./errorManager.js"
 // Ensure built-in helpers are registered at module load time
 import "./templateHelpers.js"
 
@@ -80,11 +81,12 @@ function enhanceTemplateError(error: Error, template: string): McpError {
  * @returns Arguments with resolved template content
  */
 export function resolveTemplates(
-  args: Record<string, any>
-): Record<string, any> {
-  if (!args.template) return args
+  args: Record<string, unknown>,
+  cache: ResultsCache
+): Record<string, unknown> {
+  if (!args.template || typeof args.template !== "string") return args
 
-  const templateStr = args.template
+  const templateStr = args.template as string
 
   // Try to get from cache first
   let template = templateCache.get(templateStr)
@@ -99,16 +101,20 @@ export function resolveTemplates(
       }
       throw new McpError(
         ErrorCode.InvalidParams,
-        `Template compilation error: ${error instanceof Error ? error.message : String(error)}`
+        `Template compilation error: ${ErrorManager.getErrorMessage(error)}`
       )
     }
   }
 
   // Prepare the context
+  const contentObj =
+    args.content && typeof args.content === "object"
+      ? (args.content as Record<string, unknown>)
+      : {}
   const context = {
-    ...args.content, // Spread content properties directly into context
+    ...contentObj, // Spread content properties directly into context
     content: args.content, // Keep original content for backward compatibility
-    results: resultsCache.debug(),
+    results: cache.debug(),
     now: new Date().toISOString(),
   }
 
@@ -130,7 +136,7 @@ export function resolveTemplates(
     }
     throw new McpError(
       ErrorCode.InvalidParams,
-      `Template runtime error: ${error instanceof Error ? error.message : String(error)}`
+      `Template runtime error: ${ErrorManager.getErrorMessage(error)}`
     )
   }
 

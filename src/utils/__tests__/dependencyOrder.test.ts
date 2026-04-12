@@ -90,6 +90,39 @@ describe("validateDependsOnReferences", () => {
 
     expect(() => validateDependsOnReferences(operations)).toThrow()
   })
+
+  test("throws McpError for duplicate operation IDs", () => {
+    const operations: Operation[] = [
+      { tool: "read_file", arguments: { path: "/a" }, id: "step1" },
+      { tool: "read_file", arguments: { path: "/b" }, id: "step1" },
+    ]
+
+    expect(() => validateDependsOnReferences(operations)).toThrow()
+    try {
+      validateDependsOnReferences(operations)
+    } catch (error) {
+      expect(error).toBeInstanceOf(McpError)
+      expect((error as McpError).code).toBe(ErrorCode.InvalidParams)
+      expect((error as McpError).message).toContain("Duplicate operation ID")
+      expect((error as McpError).message).toContain("step1")
+    }
+  })
+
+  test("throws McpError when three operations share a duplicate ID", () => {
+    const operations: Operation[] = [
+      { tool: "read_file", arguments: { path: "/a" }, id: "dup" },
+      { tool: "read_file", arguments: { path: "/b" }, id: "dup" },
+      { tool: "read_file", arguments: { path: "/c" }, id: "dup" },
+    ]
+
+    expect(() => validateDependsOnReferences(operations)).toThrow()
+    try {
+      validateDependsOnReferences(operations)
+    } catch (error) {
+      expect(error).toBeInstanceOf(McpError)
+      expect((error as McpError).message).toContain("Duplicate operation ID")
+    }
+  })
 })
 
 describe("createOrderedBatches", () => {

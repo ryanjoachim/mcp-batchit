@@ -1,5 +1,5 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
-import { resultsCache } from "./resultsCache.js"
+import { ResultsCache } from "./resultsCache.js"
 import {
   FileSystemResult,
   ReadResult,
@@ -10,6 +10,7 @@ import {
 } from "../types/filesystem/results.js"
 
 const RESULT_REFERENCE_REGEX = /\$\{results\.([^}]+)}/g
+const MAX_RESOLUTION_DEPTH = 10
 
 /**
  * Safely access a property on an unknown result object.
@@ -94,15 +95,21 @@ export function isUpdateResult(result: unknown): result is UpdateResult {
  * @returns The resolved arguments
  */
 export function resolveResultReferences(
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  cache: ResultsCache,
+  depth: number = 0
 ): Record<string, unknown> {
   const resolved = { ...args }
 
   for (const [key, value] of Object.entries(resolved)) {
     if (typeof value === "string") {
-      resolved[key] = resolveStringReferences(value)
+      resolved[key] = resolveStringReferences(value, cache, depth)
     } else if (typeof value === "object" && value !== null) {
-      resolved[key] = resolveResultReferences(value as Record<string, unknown>)
+      resolved[key] = resolveResultReferences(
+        value as Record<string, unknown>,
+        cache,
+        depth
+      )
     }
   }
 
@@ -189,9 +196,9 @@ export function getResultProperty(
   if (
     typeof result === "object" &&
     result !== null &&
-    propertyName in (result as any)
+    propertyName in (result as Record<string, unknown>)
   ) {
-    return (result as any)[propertyName]
+    return (result as Record<string, unknown>)[propertyName]
   }
 
   throw new McpError(
@@ -277,7 +284,7 @@ function resolvePropertyPath(result: unknown, path: string[]): unknown {
           `Cannot access property ${path[i]} of non-object value`
         )
       }
-      resolved = (resolved as any)[path[i]]
+      resolved = getProperty(resolved, path[i])
       if (resolved === undefined) {
         throw new McpError(
           ErrorCode.InvalidParams,
@@ -296,7 +303,19 @@ function resolvePropertyPath(result: unknown, path: string[]): unknown {
  * @param value The string value to resolve references in
  * @returns The resolved value
  */
-function resolveStringReferences(value: string): unknown {
+function resolveStringReferences(
+  value: string,
+  cache: ResultsCache,
+  depth: number = 0
+): unknown {
+  // Guard against infinite recursion from circular references
+  if (depth >= MAX_RESOLUTION_DEPTH) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      "Result reference resolution exceeded maximum depth"
+    )
+  }
+
   // If already resolved (not a string), return as is
   if (typeof value !== "string") {
     return value
@@ -308,21 +327,21 @@ function resolveStringReferences(value: string): unknown {
   if (match) {
     const path = match[1].split(".")
     const resultId = path[0]
-    const result = resultsCache.getResult(resultId)
 
-    if (result === undefined) {
+    if (!cache.hasResult(resultId)) {
       throw new McpError(
         ErrorCode.InvalidParams,
         `Result reference not found: ${resultId}`
       )
     }
+    const result = cache.getResult(resultId)
 
     // Handle nested property access
     const resolved = resolvePropertyPath(result, path)
 
     // Recursively resolve if result is another reference string
     return typeof resolved === "string" && resolved.includes("${results.")
-      ? resolveStringReferences(resolved)
+      ? resolveStringReferences(resolved, cache, depth + 1)
       : resolved
   }
 
@@ -332,21 +351,27 @@ function resolveStringReferences(value: string): unknown {
     (_match, reference) => {
       const path = reference.split(".")
       const resultId = path[0]
-      const result = resultsCache.getResult(resultId)
 
-      if (result === undefined) {
+      if (!cache.hasResult(resultId)) {
         throw new McpError(
           ErrorCode.InvalidParams,
           `Result reference not found: ${resultId}`
         )
       }
+      const result = cache.getResult(resultId)
 
       // Handle nested property access
       const resolved = resolvePropertyPath(result, path)
+      // Use JSON.stringify for objects to avoid "[object Object]"
+      if (typeof resolved === "object" && resolved !== null) {
+        return JSON.stringify(resolved)
+      }
       return String(resolved)
     }
   )
 
   // If resolved value is itself a reference, resolve it too
-  return resolved !== value ? resolveStringReferences(resolved) : resolved
+  return resolved !== value
+    ? resolveStringReferences(resolved as string, cache, depth + 1)
+    : resolved
 }

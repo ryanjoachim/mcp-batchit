@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from "@jest/globals"
-import { resultsCache } from "../utils/resultsCache.js"
+import { ResultsCache } from "../utils/resultsCache.js"
 import { resolveResultReferences } from "../utils/resultResolver.js"
 import { resolveTemplates } from "../utils/templateResolver.js"
 import {
@@ -10,95 +10,117 @@ import { Operation } from "../types/schemas/batch.js"
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
 
 describe("Main executor integration: result reference resolution", () => {
+  let cache: ResultsCache
+
   beforeEach(() => {
-    resultsCache.clear()
+    cache = new ResultsCache()
   })
 
   test("resolves ${results.id} in string arguments", () => {
-    resultsCache.storeResult("read1", "Hello World")
+    cache.storeResult("read1", "Hello World")
 
-    const resolved = resolveResultReferences({
-      content: "${results.read1}",
-    })
+    const resolved = resolveResultReferences(
+      {
+        content: "${results.read1}",
+      },
+      cache
+    )
 
     expect(resolved.content).toBe("Hello World")
   })
 
   test("resolves ${results.id.property} in string arguments", () => {
-    resultsCache.storeResult("config", { version: "1.0", name: "test" })
+    cache.storeResult("config", { version: "1.0", name: "test" })
 
-    const resolved = resolveResultReferences({
-      version: "${results.config.version}",
-    })
+    const resolved = resolveResultReferences(
+      {
+        version: "${results.config.version}",
+      },
+      cache
+    )
 
     expect(resolved.version).toBe("1.0")
   })
 
   test("resolves embedded references within strings", () => {
-    resultsCache.storeResult("file1", "content-here")
+    cache.storeResult("file1", "content-here")
 
-    const resolved = resolveResultReferences({
-      path: "/output/${results.file1}.txt",
-    })
+    const resolved = resolveResultReferences(
+      {
+        path: "/output/${results.file1}.txt",
+      },
+      cache
+    )
 
     expect(resolved.path).toBe("/output/content-here.txt")
   })
 
   test("throws for missing result references", () => {
     expect(() =>
-      resolveResultReferences({ content: "${results.nonexistent}" })
+      resolveResultReferences({ content: "${results.nonexistent}" }, cache)
     ).toThrow()
   })
 
   test("resolves multiple references in one value", () => {
-    resultsCache.storeResult("a", "hello")
-    resultsCache.storeResult("b", "world")
+    cache.storeResult("a", "hello")
+    cache.storeResult("b", "world")
 
     // Test each reference individually first
-    const resolved1 = resolveResultReferences({ msg: "${results.a}" })
+    const resolved1 = resolveResultReferences({ msg: "${results.a}" }, cache)
     expect(resolved1.msg).toBe("hello")
 
-    const resolved2 = resolveResultReferences({ msg: "${results.b}" })
+    const resolved2 = resolveResultReferences({ msg: "${results.b}" }, cache)
     expect(resolved2.msg).toBe("world")
 
     // Now test both in one string
-    const resolved = resolveResultReferences({
-      message: "${results.a} ${results.b}",
-    })
+    const resolved = resolveResultReferences(
+      {
+        message: "${results.a} ${results.b}",
+      },
+      cache
+    )
 
     expect(resolved.message).toBe("hello world")
   })
 })
 
 describe("Main executor integration: template resolution", () => {
+  let cache: ResultsCache
+
   beforeEach(() => {
-    resultsCache.clear()
+    cache = new ResultsCache()
   })
 
   test("resolves Handlebars templates in arguments", () => {
-    const resolved = resolveTemplates({
-      template: "Upper: {{uppercase 'hello'}}",
-    })
+    const resolved = resolveTemplates(
+      {
+        template: "Upper: {{uppercase 'hello'}}",
+      },
+      cache
+    )
 
     expect(resolved.content).toBe("Upper: HELLO")
     expect(resolved.template).toBeUndefined()
   })
 
   test("resolves templates with result references", () => {
-    resultsCache.storeResult("data", { name: "test" })
+    cache.storeResult("data", { name: "test" })
 
     // First resolve result references, then templates
-    const step1 = resolveResultReferences({
-      template: "Name: {{json results.data}}",
-    })
-    const step2 = resolveTemplates(step1)
+    const step1 = resolveResultReferences(
+      {
+        template: "Name: {{json results.data}}",
+      },
+      cache
+    )
+    const step2 = resolveTemplates(step1, cache)
 
     expect(step2.content).toContain("test")
   })
 
   test("passes through arguments without templates unchanged", () => {
     const args = { path: "/some/file.txt", content: "plain content" }
-    const resolved = resolveTemplates(args)
+    const resolved = resolveTemplates(args, cache)
 
     expect(resolved).toEqual(args)
   })
@@ -167,42 +189,44 @@ describe("Main executor integration: dependency ordering", () => {
   })
 })
 
-describe("Main executor integration: resultsCache clearing", () => {
+describe("Main executor integration: ResultsCache behavior", () => {
   test("cache is empty after clear", () => {
-    resultsCache.storeResult("id1", "value1")
-    resultsCache.storeResult("id2", "value2")
+    const cache = new ResultsCache()
+    cache.storeResult("id1", "value1")
+    cache.storeResult("id2", "value2")
 
-    expect(resultsCache.getResult("id1")).toBe("value1")
-    expect(resultsCache.getResult("id2")).toBe("value2")
+    expect(cache.getResult("id1")).toBe("value1")
+    expect(cache.getResult("id2")).toBe("value2")
 
-    resultsCache.clear()
+    cache.clear()
 
-    expect(resultsCache.getResult("id1")).toBeUndefined()
-    expect(resultsCache.getResult("id2")).toBeUndefined()
+    expect(cache.getResult("id1")).toBeUndefined()
+    expect(cache.getResult("id2")).toBeUndefined()
   })
 
-  test("stale results from previous batch do not leak", () => {
-    // Simulate first batch storing results
-    resultsCache.storeResult("read_config", { version: "1.0" })
-    expect(resultsCache.getResult("read_config")).toEqual({ version: "1.0" })
+  test("separate cache instances do not leak between batches", () => {
+    // Simulate first batch with its own cache
+    const cache1 = new ResultsCache()
+    cache1.storeResult("read_config", { version: "1.0" })
+    expect(cache1.getResult("read_config")).toEqual({ version: "1.0" })
 
-    // Clear cache (as main executor does at start of each batch)
-    resultsCache.clear()
-
-    // Simulate second batch referencing the same ID should fail
-    expect(resultsCache.getResult("read_config")).toBeUndefined()
+    // Second batch gets a fresh cache — no stale results leak
+    const cache2 = new ResultsCache()
+    expect(cache2.getResult("read_config")).toBeUndefined()
   })
 })
 
 describe("Main executor integration: end-to-end resolution pipeline", () => {
+  let cache: ResultsCache
+
   beforeEach(() => {
-    resultsCache.clear()
+    cache = new ResultsCache()
   })
 
   test("full pipeline: cache → resolve references → resolve templates", () => {
     // Simulate what the main executor does for each operation:
     // 1. Store previous operation result
-    resultsCache.storeResult("read_data", "important content")
+    cache.storeResult("read_data", "important content")
 
     // 2. Next operation references the result
     const args = {
@@ -211,12 +235,12 @@ describe("Main executor integration: end-to-end resolution pipeline", () => {
     }
 
     // 3. Resolve result references first
-    const step1 = resolveResultReferences(args)
+    const step1 = resolveResultReferences(args, cache)
     // Template strings still have Handlebars syntax, so template is preserved
     expect(step1.template).toBe("Processed: {{uppercase results.read_data}}")
 
     // 4. Resolve templates second
-    const step2 = resolveTemplates(step1)
+    const step2 = resolveTemplates(step1, cache)
     expect(step2.content).toBe("Processed: IMPORTANT CONTENT")
   })
 })

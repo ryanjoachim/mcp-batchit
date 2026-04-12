@@ -1,48 +1,50 @@
 import { describe, test, expect, beforeEach } from "@jest/globals"
 import { resolveResultReferences } from "../resultResolver.js"
-import { resultsCache } from "../resultsCache.js"
+import { ResultsCache } from "../resultsCache.js"
 import { McpError } from "@modelcontextprotocol/sdk/types.js"
 
 describe("resultResolver", () => {
+  let cache: ResultsCache
+
   beforeEach(() => {
-    resultsCache.clear()
+    cache = new ResultsCache()
   })
 
   test("resolves simple result references", () => {
-    resultsCache.storeResult("test1", "hello")
+    cache.storeResult("test1", "hello")
 
     const args = {
       value: "${results.test1}",
     }
 
-    const resolved = resolveResultReferences(args)
+    const resolved = resolveResultReferences(args, cache)
     expect(resolved.value).toBe("hello")
   })
 
   test("resolves complex result types", () => {
-    resultsCache.storeResult("test2", { foo: "bar" })
+    cache.storeResult("test2", { foo: "bar" })
 
     const args = {
       value: "${results.test2}",
     }
 
-    const resolved = resolveResultReferences(args)
+    const resolved = resolveResultReferences(args, cache)
     expect(resolved.value).toEqual({ foo: "bar" })
   })
 
   test("resolves embedded result references", () => {
-    resultsCache.storeResult("test3", "world")
+    cache.storeResult("test3", "world")
 
     const args = {
       value: "hello ${results.test3}!",
     }
 
-    const resolved = resolveResultReferences(args)
+    const resolved = resolveResultReferences(args, cache)
     expect(resolved.value).toBe("hello world!")
   })
 
   test("resolves nested object properties", () => {
-    resultsCache.storeResult("test4", "nested")
+    cache.storeResult("test4", "nested")
 
     const args = {
       top: {
@@ -52,7 +54,7 @@ describe("resultResolver", () => {
       },
     }
 
-    const resolved = resolveResultReferences(args) as {
+    const resolved = resolveResultReferences(args, cache) as {
       top: {
         middle: {
           bottom: string
@@ -67,7 +69,7 @@ describe("resultResolver", () => {
       value: "${results.missing}",
     }
 
-    expect(() => resolveResultReferences(args)).toThrow(McpError)
+    expect(() => resolveResultReferences(args, cache)).toThrow(McpError)
   })
 
   test("preserves non-string values", () => {
@@ -78,14 +80,14 @@ describe("resultResolver", () => {
       undefined: undefined,
     }
 
-    const resolved = resolveResultReferences(args)
+    const resolved = resolveResultReferences(args, cache)
     expect(resolved).toEqual(args)
   })
 
   test("handles real-world file operation chain", () => {
     // Simulate writing and reading a file
-    resultsCache.storeResult("write1", "write success")
-    resultsCache.storeResult("read1", "file content")
+    cache.storeResult("write1", "write success")
+    cache.storeResult("read1", "file content")
 
     const operations = [
       {
@@ -110,7 +112,7 @@ describe("resultResolver", () => {
       },
     ]
 
-    const resolvedArgs = resolveResultReferences(operations[2].arguments)
+    const resolvedArgs = resolveResultReferences(operations[2].arguments, cache)
     expect(resolvedArgs).toEqual({
       path: "/copy.txt",
       content: "file content",
@@ -125,10 +127,10 @@ describe("resultResolver", () => {
     }
 
     // Store result after creating args but before resolution
-    resultsCache.storeResult("dynamic", "updated content")
+    cache.storeResult("dynamic", "updated content")
 
     // Resolution should happen at write time and get latest value
-    const resolved = resolveResultReferences(args)
+    const resolved = resolveResultReferences(args, cache)
     expect(resolved).toEqual({
       path: "/test.txt",
       content: "updated content",
@@ -137,8 +139,8 @@ describe("resultResolver", () => {
 
   test("resolves nested references in write operations", () => {
     // Set up complex nested results
-    resultsCache.storeResult("config", { format: "json" })
-    resultsCache.storeResult("data", { key: "value" })
+    cache.storeResult("config", { format: "json" })
+    cache.storeResult("data", { key: "value" })
 
     const args = {
       path: "/test.${results.config.format}",
@@ -148,7 +150,7 @@ describe("resultResolver", () => {
       },
     }
 
-    const resolved = resolveResultReferences(args)
+    const resolved = resolveResultReferences(args, cache)
     expect(resolved).toEqual({
       path: "/test.json",
       content: {
@@ -166,12 +168,12 @@ describe("resultResolver", () => {
 
     // Update cache after args creation but before resolution
     setTimeout(() => {
-      resultsCache.storeResult("delayed", "late update")
+      cache.storeResult("delayed", "late update")
     }, 0)
 
     return new Promise((resolve) => {
       setTimeout(() => {
-        const resolved = resolveResultReferences(args)
+        const resolved = resolveResultReferences(args, cache)
         expect(resolved.content).toBe("late update")
         resolve(undefined)
       }, 10)
@@ -180,9 +182,9 @@ describe("resultResolver", () => {
 
   test("resolves array type results", () => {
     // Store array results
-    resultsCache.storeResult("numbers", [1, 2, 3, 4, 5])
-    resultsCache.storeResult("strings", ["a", "b", "c"])
-    resultsCache.storeResult("mixed", [1, "two", { three: 3 }, [4]])
+    cache.storeResult("numbers", [1, 2, 3, 4, 5])
+    cache.storeResult("strings", ["a", "b", "c"])
+    cache.storeResult("mixed", [1, "two", { three: 3 }, [4]])
 
     const args = {
       numbers: "${results.numbers}",
@@ -193,10 +195,10 @@ describe("resultResolver", () => {
     }
 
     // Store individual values for template testing
-    resultsCache.storeResult("firstNumber", [1, 2, 3, 4, 5][0])
-    resultsCache.storeResult("secondString", ["a", "b", "c"][1])
+    cache.storeResult("firstNumber", [1, 2, 3, 4, 5][0])
+    cache.storeResult("secondString", ["a", "b", "c"][1])
 
-    const resolved = resolveResultReferences(args) as {
+    const resolved = resolveResultReferences(args, cache) as {
       numbers: number[]
       strings: string[]
       mixed: Array<number | string | object | any[]>
@@ -213,8 +215,8 @@ describe("resultResolver", () => {
 
   test("resolves date type results", () => {
     const testDate = new Date("2025-03-14T00:00:00Z")
-    resultsCache.storeResult("date", testDate)
-    resultsCache.storeResult("dateString", testDate.toISOString())
+    cache.storeResult("date", testDate)
+    cache.storeResult("dateString", testDate.toISOString())
 
     const args = {
       directDate: "${results.date}",
@@ -223,7 +225,7 @@ describe("resultResolver", () => {
         string: "${results.dateString}",
       },
     }
-    const resolved = resolveResultReferences(args) as {
+    const resolved = resolveResultReferences(args, cache) as {
       directDate: Date
       dateInObject: {
         value: Date
@@ -247,7 +249,7 @@ describe("resultResolver", () => {
         undefined: undefined,
       },
     }
-    resultsCache.storeResult("complex", complexData)
+    cache.storeResult("complex", complexData)
 
     const args = {
       direct: "${results.complex}",
@@ -261,7 +263,7 @@ describe("resultResolver", () => {
         "Number: ${results.complex.number}, String: ${results.complex.string}",
     }
 
-    const resolved = resolveResultReferences(args) as {
+    const resolved = resolveResultReferences(args, cache) as {
       direct: typeof complexData
       partial: {
         number: number
@@ -281,5 +283,78 @@ describe("resultResolver", () => {
     expect(resolved.partial.array).toEqual(complexData.array)
     expect(resolved.partial.date).toEqual(complexData.date)
     expect(resolved.template).toBe("Number: 42, String: test")
+  })
+
+  test("throws depth-limit error for self-referencing result", () => {
+    cache.storeResult("selfref", "${results.selfref}")
+
+    const args = { value: "${results.selfref}" }
+
+    expect(() => resolveResultReferences(args, cache)).toThrow(
+      "Result reference resolution exceeded maximum depth"
+    )
+  })
+
+  test("throws depth-limit error for circular references between two results", () => {
+    cache.storeResult("loopA", "${results.loopB}")
+    cache.storeResult("loopB", "${results.loopA}")
+
+    const args = { value: "${results.loopA}" }
+
+    expect(() => resolveResultReferences(args, cache)).toThrow(
+      "Result reference resolution exceeded maximum depth"
+    )
+  })
+
+  test("embedded object reference produces JSON, not [object Object]", () => {
+    cache.storeResult("obj", { foo: "bar", num: 42 })
+
+    const args = {
+      value: "Result is: ${results.obj}",
+    }
+
+    const resolved = resolveResultReferences(args, cache) as { value: string }
+    expect(resolved.value).toContain('"foo"')
+    expect(resolved.value).toContain('"bar"')
+    expect(resolved.value).not.toContain("[object Object]")
+  })
+
+  test("valid reference chain 5 levels deep resolves correctly", () => {
+    cache.storeResult("level1", "final_value")
+    cache.storeResult("level2", "${results.level1}")
+    cache.storeResult("level3", "${results.level2}")
+    cache.storeResult("level4", "${results.level3}")
+    cache.storeResult("level5", "${results.level4}")
+
+    const args = { value: "${results.level5}" }
+
+    const resolved = resolveResultReferences(args, cache)
+    expect(resolved.value).toBe("final_value")
+  })
+
+  test("stored undefined value does not throw 'not found'", () => {
+    cache.storeResult("undef", undefined)
+
+    const args = { value: "${results.undef}" }
+
+    const resolved = resolveResultReferences(args, cache)
+    expect(resolved.value).toBeUndefined()
+  })
+
+  test("embedded stored undefined value does not throw 'not found'", () => {
+    cache.storeResult("undef", undefined)
+
+    const args = { value: "prefix ${results.undef} suffix" }
+
+    const resolved = resolveResultReferences(args, cache) as { value: string }
+    expect(resolved.value).toBe("prefix undefined suffix")
+  })
+
+  test("non-existent result ID still throws 'not found'", () => {
+    const args = { value: "${results.does_not_exist}" }
+
+    expect(() => resolveResultReferences(args, cache)).toThrow(
+      "Result reference not found: does_not_exist"
+    )
   })
 })

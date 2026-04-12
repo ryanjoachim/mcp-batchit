@@ -1,5 +1,7 @@
 /**
- * Cache for storing operation results during batch execution
+ * Cache for storing operation results during batch execution.
+ * Each BatchExecutor.executeBatch call creates a fresh instance,
+ * so concurrent batches never interfere with each other's results.
  */
 export class ResultsCache {
   private cache = new Map<string, unknown>()
@@ -20,6 +22,14 @@ export class ResultsCache {
   }
 
   /**
+   * Check if a result exists for a given operation ID
+   * Distinguishes between "key missing" and "key present with undefined value"
+   */
+  hasResult(operationId: string): boolean {
+    return this.cache.has(operationId)
+  }
+
+  /**
    * Clear all stored results
    */
   clear(): void {
@@ -37,8 +47,3 @@ export class ResultsCache {
     return contents
   }
 }
-
-/**
- * Singleton instance of ResultsCache
- */
-export const resultsCache = new ResultsCache()

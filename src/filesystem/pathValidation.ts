@@ -11,6 +11,7 @@
  */
 
 import path from "path"
+import fs from "fs/promises"
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
 import { ErrorManager } from "../utils/errorManager.js"
 import { PathOptions, PathValidationResult } from "../types/filesystem/paths.js"
@@ -127,4 +128,70 @@ export function validatePathWithResult(
     // Re-throw other errors
     throw error
   }
+}
+
+/**
+ * Async path validation that includes symlink resolution.
+ * Wraps validatePathWithResult and adds fs.realpath checks.
+ * Call this after validatePathWithResult for full security.
+ *
+ * @param filePath The path to validate
+ * @param options Path validation options
+ * @returns A PathValidationResult object
+ */
+export async function validatePathWithSymlinks(
+  filePath: string,
+  options: PathOptions
+): Promise<PathValidationResult> {
+  const result = validatePathWithResult(filePath, options)
+
+  // If basic validation already failed, return early
+  if (!result.isWithinRoot) {
+    return result
+  }
+
+  // Skip symlink resolution if disabled
+  if (options.resolveSymlinks === false) {
+    return result
+  }
+
+  const normalizedRoot = path.normalize(options.rootDirectory)
+
+  try {
+    const realRoot = await fs.realpath(normalizedRoot)
+    try {
+      const realPath = await fs.realpath(result.normalizedPath)
+      if (!realPath.startsWith(realRoot)) {
+        throw ErrorManager.createPathValidationError(
+          result.normalizedPath,
+          "Resolved path escapes root directory (possible symlink)"
+        )
+      }
+    } catch (realpathError) {
+      // If the path doesn't exist yet (ENOENT), resolve the parent instead
+      if (
+        realpathError instanceof Error &&
+        (realpathError as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        const parentDir = path.dirname(result.normalizedPath)
+        try {
+          const realParent = await fs.realpath(parentDir)
+          if (!realParent.startsWith(realRoot)) {
+            throw ErrorManager.createPathValidationError(
+              result.normalizedPath,
+              "Resolved parent path escapes root directory (possible symlink)"
+            )
+          }
+        } catch {
+          // Parent doesn't exist either, skip symlink check
+        }
+      }
+      // Other errors (e.g., permissions) are not symlink issues, skip
+    }
+  } catch (error) {
+    if (error instanceof McpError) throw error
+    // If realpath on root fails, skip symlink resolution
+  }
+
+  return result
 }

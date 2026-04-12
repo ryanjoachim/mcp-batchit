@@ -20,6 +20,13 @@ export interface PathOptions {
    * Whether to allow relative paths. Defaults to false for security.
    */
   allowRelative?: boolean
+
+  /**
+   * Whether to resolve symlinks and verify they stay within the root directory.
+   * Defaults to true for security. Set to false for performance-sensitive paths
+   * where symlinks are trusted.
+   */
+  resolveSymlinks?: boolean
 }
 
 /**

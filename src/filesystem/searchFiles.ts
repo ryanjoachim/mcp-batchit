@@ -2,6 +2,9 @@ import fs from "fs/promises"
 import path from "path"
 import { minimatch } from "minimatch"
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
+import { validatePathWithSymlinks } from "./pathValidation.js"
+import { PathOptions } from "../types/filesystem/paths.js"
+import { ErrorManager } from "../utils/errorManager.js"
 
 /**
  * Options for file search operations
@@ -41,32 +44,11 @@ export interface SearchMatch {
 export async function searchFiles(
   rootPath: string,
   options: SearchOptions,
-  basePath: string
+  config: PathOptions
 ): Promise<SearchMatch[]> {
   try {
-    // Basic path validation
-    if (!path.isAbsolute(rootPath)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Path must be absolute: ${rootPath}`
-      )
-    }
-
-    const normalized = path.normalize(rootPath)
-
-    if (normalized.includes("..")) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Path cannot contain parent directory references (..): ${normalized}`
-      )
-    }
-
-    if (!normalized.startsWith(path.normalize(basePath))) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Path must be within root directory ${basePath}: ${normalized}`
-      )
-    }
+    const validResult = await validatePathWithSymlinks(rootPath, config)
+    const normalized = validResult.normalizedPath
 
     const opts = {
       pattern: options.pattern,
@@ -207,9 +189,9 @@ export async function searchFiles(
                       const content = await fs.readFile(fullPath, "utf-8")
                       match.contentMatches = getContentMatches(content)
                     } catch (error) {
-                      match.error = `Failed to read file content: ${
-                        error instanceof Error ? error.message : String(error)
-                      }`
+                      match.error = `Failed to read file content: ${ErrorManager.getErrorMessage(
+                        error
+                      )}`
                     }
                   }
 
@@ -240,7 +222,7 @@ export async function searchFiles(
                 results.push({
                   path: fullPath,
                   type: entry.isDirectory() ? "directory" : "file",
-                  error: error instanceof Error ? error.message : String(error),
+                  error: ErrorManager.getErrorMessage(error),
                 })
               }
             })
@@ -273,7 +255,7 @@ export async function searchFiles(
 
     throw new McpError(
       ErrorCode.InternalError,
-      `Failed to search files: ${error instanceof Error ? error.message : String(error)}`
+      `Failed to search files: ${ErrorManager.getErrorMessage(error)}`
     )
   }
 }

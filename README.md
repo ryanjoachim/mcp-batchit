@@ -152,7 +152,7 @@ Built-in Handlebars helpers for manipulating values in templates:
 ```bash
 npm install
 npm run build
-npm start
+node build/index.js
 ```
 
 Add to Claude Desktop (`claude_desktop_config.json`):

@@ -23,6 +23,7 @@ docs/
 memory-bank/
 .claude/
 Claude.md
+.batch_examples
 
 # Logs
 logs/

@@ -17,6 +17,8 @@ import {
   ContentOperationType,
 } from "../types/filesystem/contentTracking.js"
 import { ErrorManager } from "../utils/errorManager.js"
+import { validatePathWithSymlinks } from "./pathValidation.js"
+import { PathOptions } from "../types/filesystem/paths.js"
 
 /**
  * Creates a content modification record for a file operation
@@ -40,29 +42,9 @@ export async function trackContentModification(
     compression: options.compression,
   }
   try {
-    const normalized = path.normalize(filePath)
-
-    // Basic path validation
-    if (!path.isAbsolute(normalized)) {
-      throw ErrorManager.createPathValidationError(
-        normalized,
-        "Must be absolute path"
-      )
-    }
-
-    if (normalized.includes("..")) {
-      throw ErrorManager.createPathValidationError(
-        normalized,
-        "Cannot contain parent directory references (..)"
-      )
-    }
-
-    if (!normalized.startsWith(path.normalize(rootDirectory))) {
-      throw ErrorManager.createPathValidationError(
-        normalized,
-        `Must be within root directory ${rootDirectory}`
-      )
-    }
+    const config: PathOptions = { rootDirectory }
+    const validResult = await validatePathWithSymlinks(filePath, config)
+    const normalized = validResult.normalizedPath
 
     // Create the content modification object using the new type
     const modification: ContentModification = {

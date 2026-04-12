@@ -77,15 +77,14 @@ describe("Filesystem Operations", () => {
       const stats = await fs.stat(testFilePath1)
       const afterWrite = Date.now()
 
-      // Test file stats - use small tolerance for timing variations
+      // Test file stats - verify mtime is a valid recent timestamp
       expect(new Date(stats.mtime)).toBeInstanceOf(Date)
-      expect(
-        new Date(stats.mtime).getTime() - 1
-      ).toBeGreaterThanOrEqual(beforeWrite)
-      // Use 1000ms buffer for upper bound timing comparison
-      expect(new Date(stats.mtime).getTime()).toBeLessThanOrEqual(
-        afterWrite + 1000
-      )
+      // On Windows (NTFS), Date.now() and filesystem timestamps can diverge
+      // significantly due to different clock sources. Just verify mtime is
+      // within a reasonable window around the write operation.
+      const mtimeMs = new Date(stats.mtime).getTime()
+      expect(mtimeMs).toBeGreaterThanOrEqual(beforeWrite - 2000)
+      expect(mtimeMs).toBeLessThanOrEqual(afterWrite + 2000)
       expect(stats.size).toBe(content.length)
 
       // Test metadata

@@ -152,4 +152,28 @@ describe("ErrorManager", () => {
       )
     })
   })
+
+  describe("getErrorMessage", () => {
+    it("extracts message from Error instances", () => {
+      expect(ErrorManager.getErrorMessage(new Error("test message"))).toBe(
+        "test message"
+      )
+    })
+
+    it("converts string values to themselves", () => {
+      expect(ErrorManager.getErrorMessage("string error")).toBe("string error")
+    })
+
+    it("converts numbers to strings", () => {
+      expect(ErrorManager.getErrorMessage(42)).toBe("42")
+    })
+
+    it("converts null to 'null'", () => {
+      expect(ErrorManager.getErrorMessage(null)).toBe("null")
+    })
+
+    it("converts undefined to 'undefined'", () => {
+      expect(ErrorManager.getErrorMessage(undefined)).toBe("undefined")
+    })
+  })
 })

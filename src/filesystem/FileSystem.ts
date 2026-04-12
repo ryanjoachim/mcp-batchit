@@ -3,11 +3,12 @@ import fs from "fs/promises"
 import { isBinaryFile } from "isbinaryfile"
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
 import { withRecovery } from "../utils/recovery.js"
-import { validatePathWithResult } from "./pathValidation.js"
+import { validatePathWithSymlinks } from "./pathValidation.js"
 import { trackContentModification } from "./contentTracking.js"
 import { extractTextFromPDF, extractTextFromDOCX } from "./fileTypeHandlers.js"
 import { resolveResultReferences } from "../utils/resultResolver.js"
 import { resolveTemplates } from "../utils/templateResolver.js"
+import { ResultsCache } from "../utils/resultsCache.js"
 import { ContentTrackingOptions } from "../types/filesystem/contentTracking.js"
 import { PathOptions } from "../types/filesystem/paths.js"
 
@@ -89,6 +90,12 @@ export interface WriteOptions {
 export class FileSystem {
   private readonly config: PathOptions
   private readonly maxConcurrent: number
+  /**
+   * ResultsCache instance used for template/result resolution.
+   * Set externally by BatchExecutor for per-batch isolation,
+   * or defaults to a standalone instance for direct usage.
+   */
+  cache: ResultsCache = new ResultsCache()
 
   /** The root directory this FileSystem instance operates within. */
   get rootDirectory(): string {
@@ -115,7 +122,10 @@ export class FileSystem {
    */
   async readFile(filePath: string, options: ReadOptions = {}): Promise<string> {
     return withRecovery(async () => {
-      const validationResult = validatePathWithResult(filePath, this.config)
+      const validationResult = await validatePathWithSymlinks(
+        filePath,
+        this.config
+      )
       const validPath = validationResult.normalizedPath
       const opts = {
         encoding: options.encoding || "utf-8",
@@ -193,13 +203,18 @@ export class FileSystem {
    * @param options Options for reading the files
    * @returns Array of file results with content or error information
    */
-  async readFiles(paths: string[], options: ReadOptions = {}): Promise<any[]> {
+  async readFiles(
+    paths: string[],
+    options: ReadOptions = {}
+  ): Promise<{ path: string; content?: string; error?: string }[]> {
     if (!Array.isArray(paths) || paths.length === 0) {
       throw ErrorManager.createMissingParamError("paths", "readFiles operation")
     }
 
     // Initialize results array with the same length as paths
-    const results: any[] = Array(paths.length).fill(null)
+    const results: { path: string; content?: string; error?: string }[] = Array(
+      paths.length
+    ).fill(null)
 
     // Create a function to process a file at a specific index
     const processFile = async (filePath: string, index: number) => {
@@ -241,8 +256,11 @@ export class FileSystem {
     content: unknown,
     options: WriteOptions = {},
     previousResult?: unknown
-  ): Promise<any> {
-    const validationResult = validatePathWithResult(filePath, this.config)
+  ): Promise<{ content: string; summary?: string }> {
+    const validationResult = await validatePathWithSymlinks(
+      filePath,
+      this.config
+    )
     const validPath = validationResult.normalizedPath
     const dir = path.dirname(validPath)
     await fs.mkdir(dir, { recursive: true })
@@ -253,7 +271,7 @@ export class FileSystem {
     try {
       existingContent = await fs.readFile(validPath, "utf-8")
     } catch (error) {
-      if ((error as any).code === "ENOENT") {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         hadExistingContent = false
       } else {
         throw ErrorManager.normalizeError(
@@ -273,11 +291,17 @@ export class FileSystem {
             ? { content: previousResult }
             : { content }
         try {
-          const resolvedRefs = resolveResultReferences(contentToResolve)
-          const templateResult = resolveTemplates({
-            template: options.template,
-            content: resolvedRefs.content,
-          })
+          const resolvedRefs = resolveResultReferences(
+            contentToResolve,
+            this.cache
+          )
+          const templateResult = resolveTemplates(
+            {
+              template: options.template,
+              content: resolvedRefs.content,
+            },
+            this.cache
+          )
           resolvedContent = templateResult.content
         } catch (error) {
           throw ErrorManager.normalizeError(
@@ -290,7 +314,10 @@ export class FileSystem {
           previousResult !== undefined
             ? { content: previousResult }
             : { content }
-        resolvedContent = resolveResultReferences(contentToResolve).content
+        resolvedContent = resolveResultReferences(
+          contentToResolve,
+          this.cache
+        ).content
       }
 
       if (resolvedContent === undefined || resolvedContent === null) {
@@ -349,8 +376,14 @@ export class FileSystem {
     options: { overwrite?: boolean } = {}
   ): Promise<void> {
     return withRecovery(async () => {
-      const validSourceResult = validatePathWithResult(sourcePath, this.config)
-      const validDestResult = validatePathWithResult(destPath, this.config)
+      const validSourceResult = await validatePathWithSymlinks(
+        sourcePath,
+        this.config
+      )
+      const validDestResult = await validatePathWithSymlinks(
+        destPath,
+        this.config
+      )
       const validSourcePath = validSourceResult.normalizedPath
       const validDestPath = validDestResult.normalizedPath
 
@@ -415,7 +448,10 @@ export class FileSystem {
    */
   async deleteFile(filePath: string): Promise<void> {
     return withRecovery(async () => {
-      const validationResult = validatePathWithResult(filePath, this.config)
+      const validationResult = await validatePathWithSymlinks(
+        filePath,
+        this.config
+      )
       const validPath = validationResult.normalizedPath
 
       try {
@@ -444,8 +480,14 @@ export class FileSystem {
    */
   async copyFile(sourcePath: string, destPath: string): Promise<void> {
     return withRecovery(async () => {
-      const validSourceResult = validatePathWithResult(sourcePath, this.config)
-      const validDestResult = validatePathWithResult(destPath, this.config)
+      const validSourceResult = await validatePathWithSymlinks(
+        sourcePath,
+        this.config
+      )
+      const validDestResult = await validatePathWithSymlinks(
+        destPath,
+        this.config
+      )
       const validSourcePath = validSourceResult.normalizedPath
       const validDestPath = validDestResult.normalizedPath
 
@@ -531,14 +573,14 @@ export class FileSystem {
     directory: string,
     options: SearchOptions
   ): Promise<unknown> {
-    return searchFiles(directory, options, this.config.rootDirectory)
+    return searchFiles(directory, options, this.config)
   }
 
   /**
    * Get detailed information about a file or directory
    */
   async getFileInfo(filePath: string): Promise<FileInfo> {
-    return getFileInfo(filePath, this.config.rootDirectory)
+    return getFileInfo(filePath, this.config)
   }
 
   /**
@@ -548,7 +590,7 @@ export class FileSystem {
     dirPath: string,
     format: "json" | "text" = "json"
   ): Promise<string> {
-    return directoryTree(dirPath, this.config.rootDirectory, format)
+    return directoryTree(dirPath, this.config, format)
   }
 
   /**
@@ -559,7 +601,7 @@ export class FileSystem {
    */
   async updateFile(operation: UpdateOperation): Promise<UpdateResult> {
     return withRecovery(async () => {
-      const validationResult = validatePathWithResult(
+      const validationResult = await validatePathWithSymlinks(
         operation.path,
         this.config
       )

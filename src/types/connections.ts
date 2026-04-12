@@ -40,6 +40,8 @@ export interface TransportConnection extends BaseConnection {
 export interface ProviderConnection extends BaseConnection {
   type: "provider"
   provider: Provider
+  /** Underlying FileSystem for internal providers, used to share the batch's ResultsCache */
+  fileSystem?: import("../filesystem/FileSystem.js").FileSystem
   client?: never
   transport?: never
   childProcess?: never
@@ -92,11 +94,13 @@ export function createTransportConnection(
  */
 export function createProviderConnection(
   provider: Provider,
-  identity: ServerIdentity
+  identity: ServerIdentity,
+  fileSystem?: import("../filesystem/FileSystem.js").FileSystem
 ): ProviderConnection {
   return {
     type: "provider",
     provider,
+    fileSystem,
     lastUsed: Date.now(),
     identity,
   }

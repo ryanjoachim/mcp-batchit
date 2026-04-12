@@ -62,6 +62,37 @@ describe("recovery", () => {
       expect(isTransientError(genericInternalError)).toBe(false)
     })
 
+    it("identifies transient InternalErrors via data.errorCode", () => {
+      const eagainWrapped = new McpError(
+        ErrorCode.InternalError,
+        "Resource error: temporarily unavailable",
+        { errorCode: "EAGAIN" }
+      )
+      const econnresetWrapped = new McpError(
+        ErrorCode.InternalError,
+        "Resource error: connection reset",
+        { errorCode: "ECONNRESET" }
+      )
+      const econnrefusedWrapped = new McpError(
+        ErrorCode.InternalError,
+        "Resource error: connection refused",
+        { errorCode: "ECONNREFUSED" }
+      )
+
+      expect(isTransientError(eagainWrapped)).toBe(true)
+      expect(isTransientError(econnresetWrapped)).toBe(true)
+      expect(isTransientError(econnrefusedWrapped)).toBe(true)
+    })
+
+    it("does not misclassify non-transient errorCode in InternalError", () => {
+      const enoentWrapped = new McpError(
+        ErrorCode.InternalError,
+        "Resource error: not found",
+        { errorCode: "ENOENT" }
+      )
+      expect(isTransientError(enoentWrapped)).toBe(false)
+    })
+
     it("identifies transient Node.js errors correctly", () => {
       const connectionResetError = new Error("Connection reset")
       ;(connectionResetError as any).code = "ECONNRESET"
@@ -138,6 +169,49 @@ describe("recovery", () => {
         const mcpError = error as McpError
         expect(mcpError.message).toContain("Non-retryable error")
         expect((mcpError as any).data.originalError).toBe(originalError)
+      }
+    })
+
+    it("retries and succeeds after transient failures", async () => {
+      const transientError = new Error("Connection reset")
+      ;(transientError as any).code = "ECONNRESET"
+
+      const operation = jest
+        .fn()
+        .mockRejectedValueOnce(transientError)
+        .mockRejectedValueOnce(transientError)
+        .mockResolvedValueOnce("recovered")
+
+      const result = await withRecovery(operation, {
+        initialDelay: 10,
+        backoffFactor: 1,
+        maxDelay: 10,
+      })
+
+      expect(result).toBe("recovered")
+      expect(operation).toHaveBeenCalledTimes(3)
+    })
+
+    it("exhausts max retries for persistent transient errors", async () => {
+      const transientError = new Error("Connection reset")
+      ;(transientError as any).code = "ECONNRESET"
+
+      const operation = jest.fn().mockRejectedValue(transientError)
+
+      try {
+        await withRecovery(operation, {
+          maxRetries: 2,
+          initialDelay: 10,
+          backoffFactor: 1,
+          maxDelay: 10,
+        })
+        fail("Should have thrown an error")
+      } catch (error) {
+        expect(error).toBeInstanceOf(McpError)
+        const mcpError = error as McpError
+        expect(mcpError.message).toContain("Operation failed after 2 retries")
+        // maxRetries=2 means 2 retry attempts after the initial failure = 2 total calls
+        expect(operation).toHaveBeenCalledTimes(2)
       }
     })
   })

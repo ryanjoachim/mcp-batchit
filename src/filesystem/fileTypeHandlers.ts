@@ -1,7 +1,7 @@
 import { promises as fs } from "fs"
 import path from "path"
 import { ErrorManager } from "../utils/errorManager.js"
-import pdfParse from "./pdfParseWrapper.js"
+import { extractText, getDocumentProxy } from "unpdf"
 import { FileMetadata } from "../types/filesystem/fileInfo.js"
 
 /**
@@ -41,22 +41,18 @@ export function getMimeType(filePath: string): string | undefined {
 }
 
 /**
- * Extracts text content from a PDF file
+ * Extracts text content from a PDF file using unpdf
  */
 export async function extractTextFromPDF(filePath: string): Promise<string> {
   try {
-    // Read the PDF file as a buffer
     const dataBuffer = await fs.readFile(filePath)
-
-    // Extract text from PDF
-    const data = await pdfParse(dataBuffer)
-
-    // Return the extracted text
-    return data.text
+    const pdf = await getDocumentProxy(new Uint8Array(dataBuffer))
+    const { text } = await extractText(pdf, { mergePages: true })
+    return text
   } catch (error) {
     throw ErrorManager.createInvalidFormatError(
       "PDF",
-      `Failed to extract text: ${error instanceof Error ? error.message : String(error)}`
+      `Failed to extract text: ${ErrorManager.getErrorMessage(error)}`
     )
   }
 }
@@ -72,7 +68,7 @@ export async function extractTextFromDOCX(filePath: string): Promise<string> {
   } catch (error) {
     throw ErrorManager.createInvalidFormatError(
       "DOCX",
-      `Failed to extract text: ${error instanceof Error ? error.message : String(error)}`
+      `Failed to extract text: ${ErrorManager.getErrorMessage(error)}`
     )
   }
 }
@@ -106,8 +102,8 @@ export async function extractFileMetadata(
       }
     } else if (mimeType === "application/pdf") {
       const dataBuffer = await fs.readFile(filePath)
-      const pdfData = await pdfParse(dataBuffer)
-      metadata.pageCount = pdfData.numpages
+      const pdf = await getDocumentProxy(new Uint8Array(dataBuffer))
+      metadata.pageCount = pdf.numPages
     }
 
     return metadata
@@ -115,7 +111,7 @@ export async function extractFileMetadata(
     const fileType = path.extname(filePath).toLowerCase().slice(1)
     throw ErrorManager.createInvalidFormatError(
       fileType || "file",
-      `Failed to extract metadata: ${error instanceof Error ? error.message : String(error)}`
+      `Failed to extract metadata: ${ErrorManager.getErrorMessage(error)}`
     )
   }
 }

@@ -41,15 +41,33 @@ export function isTransientError(error: unknown): boolean {
       case ErrorCode.RequestTimeout:
         return true
 
-      // For InternalError, we need to check the message
-      case ErrorCode.InternalError:
-        // Simple check for common transient error patterns
+      // For InternalError, we need to check the message and data.errorCode
+      case ErrorCode.InternalError: {
+        // Check if the McpError wraps a known transient system error code
+        const data = error.data as Record<string, unknown> | undefined
+        if (data?.errorCode && typeof data.errorCode === "string") {
+          const transientErrorCodes = [
+            "ECONNRESET",
+            "ECONNREFUSED",
+            "ECONNABORTED",
+            "ETIMEDOUT",
+            "ESOCKETTIMEDOUT",
+            "EAGAIN",
+            "EPIPE",
+            "ESHUTDOWN",
+          ]
+          if (transientErrorCodes.includes(data.errorCode)) {
+            return true
+          }
+        }
+        // Fallback: check message for common transient error patterns
         const message = error.message.toLowerCase()
         return (
           message.includes("timeout") ||
           message.includes("connection") ||
           message.includes("network")
         )
+      }
 
       default:
         return false
@@ -58,7 +76,7 @@ export function isTransientError(error: unknown): boolean {
 
   // For Node.js errors with error codes
   if (error instanceof Error && "code" in error) {
-    const code = (error as any).code
+    const code = (error as NodeJS.ErrnoException).code as string
 
     // Common transient error codes
     const transientCodes = [

@@ -1,6 +1,9 @@
 import fs from "fs/promises"
 import path from "path"
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
+import { validatePathWithSymlinks } from "./pathValidation.js"
+import { PathOptions } from "../types/filesystem/paths.js"
+import { ErrorManager } from "../utils/errorManager.js"
 
 /**
  * Represents a file or directory entry in the tree
@@ -18,32 +21,11 @@ interface TreeEntry {
  */
 async function buildTree(
   currentPath: string,
-  rootDirectory: string
+  config: PathOptions
 ): Promise<TreeEntry[]> {
   try {
-    // Basic path validation
-    if (!path.isAbsolute(currentPath)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Path must be absolute: ${currentPath}`
-      )
-    }
-
-    const normalized = path.normalize(currentPath)
-
-    if (normalized.includes("..")) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Path cannot contain parent directory references (..): ${normalized}`
-      )
-    }
-
-    if (!normalized.startsWith(path.normalize(rootDirectory))) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Path must be within root directory ${rootDirectory}: ${normalized}`
-      )
-    }
+    const validResult = await validatePathWithSymlinks(currentPath, config)
+    const normalized = validResult.normalizedPath
 
     const entries = await fs.readdir(normalized, { withFileTypes: true })
     const result: TreeEntry[] = []
@@ -60,7 +42,7 @@ async function buildTree(
       }
 
       if (entry.isDirectory()) {
-        treeEntry.children = await buildTree(entryPath, rootDirectory)
+        treeEntry.children = await buildTree(entryPath, config)
       }
 
       result.push(treeEntry)
@@ -82,7 +64,7 @@ async function buildTree(
 
     throw new McpError(
       ErrorCode.InternalError,
-      `Failed to build directory tree: ${error instanceof Error ? error.message : String(error)}`
+      `Failed to build directory tree: ${ErrorManager.getErrorMessage(error)}`
     )
   }
 }
@@ -92,11 +74,11 @@ async function buildTree(
  */
 export async function directoryTree(
   dirPath: string,
-  rootDirectory: string,
+  config: PathOptions,
   format: "json" | "text" = "json"
 ): Promise<string> {
   try {
-    const tree = await buildTree(dirPath, rootDirectory)
+    const tree = await buildTree(dirPath, config)
 
     if (format === "text") {
       // Generate text representation
@@ -136,7 +118,7 @@ export async function directoryTree(
 
     throw new McpError(
       ErrorCode.InternalError,
-      `Failed to generate directory tree: ${error instanceof Error ? error.message : String(error)}`
+      `Failed to generate directory tree: ${ErrorManager.getErrorMessage(error)}`
     )
   }
 }

@@ -20,7 +20,7 @@ export function mapToMcpError(error: unknown): McpError {
 
   // Node.js specific error codes
   if (error instanceof Error && "code" in error) {
-    const code = (error as any).code
+    const code = (error as NodeJS.ErrnoException).code as string
     const errorMessage = error.message
 
     // File system errors - Invalid Parameters (parameter validation failures)

@@ -32,10 +32,16 @@ export const BatchOptionsSchema = z
   .object({
     maxConcurrent: z
       .number()
+      .int()
+      .min(1)
+      .max(100)
       .default(10)
       .describe("Maximum number of concurrent operations"),
     timeoutMs: z
       .number()
+      .int()
+      .min(100)
+      .max(3600000)
       .default(30000)
       .describe("Operation timeout in milliseconds"),
     stopOnError: z.boolean().default(false).describe("Stop on first error"),
@@ -103,7 +109,8 @@ export const BatchArgsSchema = z.object({
   targetServer: TargetServerSchema,
   operations: z
     .array(OperationSchema)
-    .describe("Array of operations to execute"),
+    .max(1000)
+    .describe("Array of operations to execute (max 1000)"),
   options: BatchOptionsSchema,
 })
 

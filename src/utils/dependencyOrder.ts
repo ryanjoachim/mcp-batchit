@@ -8,7 +8,15 @@ import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
 export function validateDependsOnReferences(operations: Operation[]): void {
   const knownIds = new Set<string>()
   for (const op of operations) {
-    if (op.id) knownIds.add(op.id)
+    if (op.id) {
+      if (knownIds.has(op.id)) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Duplicate operation ID: "${op.id}". Each operation ID must be unique.`
+        )
+      }
+      knownIds.add(op.id)
+    }
   }
 
   for (const op of operations) {
@@ -81,6 +89,15 @@ export function createOrderedBatches(operations: Operation[]): Operation[][] {
 
     // Add batch and mark as completed
     batches.push(currentBatch)
+
+    // Guard against unbounded dependency chains
+    if (batches.length > 50) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        "Dependency chain exceeds maximum depth of 50"
+      )
+    }
+
     currentBatch.forEach((op) => {
       if (op.id) completed.add(op.id)
 

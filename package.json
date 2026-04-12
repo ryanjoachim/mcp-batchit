@@ -9,7 +9,9 @@
     "mcp-batchit": "./build/index.js"
   },
   "files": [
-    "build"
+    "build",
+    "!build/**/__tests__",
+    "!build/**/*.test.*"
   ],
   "scripts": {
     "build": "tsc",
@@ -20,7 +22,8 @@
     "lint": "prettier --write \"src/**/*.{ts,json,md}\"",
     "lint:check": "prettier --check \"src/**/*.{ts,json,md}\"",
     "test": "jest",
-    "validate": "npm run test && npm run lint"
+    "validate": "npm run test && npm run lint",
+    "start": "node build/index.js"
   },
   "keywords": [
     "mcp",
@@ -46,7 +49,7 @@
     "isbinaryfile": "^5.0.4",
     "mammoth": "^1.9.0",
     "minimatch": "^10.0.1",
-    "pdf-parse": "^1.1.1",
+    "unpdf": "^1.4.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
@@ -55,7 +58,6 @@
     "@types/handlebars": "^4.0.40",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.13.0",
-    "@types/pdf-parse": "^1.1.4",
     "jest": "^29.7.0",
     "prettier": "^3.5.1",
     "rimraf": "^5.0.10",

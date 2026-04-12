@@ -3,7 +3,6 @@ import path from "path"
 import os from "os"
 import { describe, it, expect, beforeEach, afterEach } from "@jest/globals"
 import { FileSystem } from "../FileSystem.js"
-import { resultsCache } from "../../utils/resultsCache.js"
 import { clearTemplateCache } from "../../utils/templateResolver.js"
 
 describe("Template File Operations", () => {
@@ -16,7 +15,6 @@ describe("Template File Operations", () => {
     await fs.mkdir(testDir, { recursive: true })
     await fs.access(testDir) // Verify directory exists
     testFilePath = path.join(testDir, "test.txt")
-    resultsCache.clear()
     clearTemplateCache()
     fileSystem = new FileSystem({ rootDirectory: testDir })
   })
@@ -83,7 +81,7 @@ describe("Template File Operations", () => {
   })
 
   it("should use previous results in templates", async () => {
-    resultsCache.storeResult("prevOp", { value: "test value" })
+    fileSystem.cache.storeResult("prevOp", { value: "test value" })
 
     const result = await fileSystem.writeFile(
       testFilePath,
@@ -118,7 +116,7 @@ describe("Template File Operations", () => {
   })
 
   it("should handle parseJson helper in templates", async () => {
-    resultsCache.storeResult("jsonString", '{"key":"value"}')
+    fileSystem.cache.storeResult("jsonString", '{"key":"value"}')
 
     const result = await fileSystem.writeFile(
       testFilePath,

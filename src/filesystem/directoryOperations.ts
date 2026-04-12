@@ -1,5 +1,5 @@
 import fs from "fs/promises"
-import { validatePathWithResult } from "./pathValidation.js"
+import { validatePathWithSymlinks } from "./pathValidation.js"
 import { PathOptions } from "../types/filesystem/paths.js"
 import { withRecovery } from "../utils/recovery.js"
 
@@ -14,7 +14,7 @@ export async function createDirectory(
     const paths = Array.isArray(dirPath) ? dirPath : [dirPath]
 
     for (const p of paths) {
-      const validResult = validatePathWithResult(p, config)
+      const validResult = await validatePathWithSymlinks(p, config)
       const validPath = validResult.normalizedPath
       await fs.mkdir(validPath, { recursive: true })
     }
@@ -29,7 +29,7 @@ export async function listDirectory(
   config: PathOptions
 ): Promise<string> {
   return withRecovery(async () => {
-    const validResult = validatePathWithResult(dirPath, config)
+    const validResult = await validatePathWithSymlinks(dirPath, config)
     const validPath = validResult.normalizedPath
 
     const entries = await fs.readdir(validPath, { withFileTypes: true })
