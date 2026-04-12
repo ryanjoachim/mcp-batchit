@@ -20,7 +20,7 @@ import {
 } from "../types/connections.js"
 import { ServerIdentity, TransportConfig } from "../types/schemas/index.js"
 
-export const VERSION = "1.2.1"
+export const VERSION = "1.3.1"
 
 export class ConnectionManager {
   private connections = new Map<string, ServerConnection>()
