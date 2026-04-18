@@ -1,3 +1,5 @@
+import { normalizeContent } from "./normalizeContent.js"
+
 /**
  * Represents a line-based diff operation
  */
@@ -17,26 +19,6 @@ export interface DiffOptions {
 }
 
 /**
- * Normalizes line endings and optionally handles whitespace and case
- */
-export function normalizeContent(
-  content: string,
-  options: DiffOptions = {}
-): string {
-  let result = content.replace(/\r\n/g, "\n")
-
-  if (options.ignoreWhitespace) {
-    result = result.replace(/\s+/g, " ").trim()
-  }
-
-  if (options.ignoreCase) {
-    result = result.toLowerCase()
-  }
-
-  return result
-}
-
-/**
  * Applies a series of line-based operations to text content
  * Maintains correct line offsets as operations affect line numbers
  */
@@ -45,7 +27,10 @@ export function applyLineDiff(
   ops: LineDiffOperation[],
   options: DiffOptions = {}
 ): string {
-  const normalizedContent = normalizeContent(existingContent, options)
+  const normalizedContent = normalizeContent(existingContent, {
+    normalizeWhitespace: options.ignoreWhitespace,
+    ignoreCase: options.ignoreCase,
+  })
   const lines = normalizedContent.split("\n")
 
   // Sort operations by line number to process in order
@@ -62,7 +47,10 @@ export function applyLineDiff(
       case "insert":
         if (!op.text) continue
 
-        const normalizedText = normalizeContent(op.text, options)
+        const normalizedText = normalizeContent(op.text, {
+          normalizeWhitespace: options.ignoreWhitespace,
+          ignoreCase: options.ignoreCase,
+        })
 
         if (idx < 0) {
           // Insert at beginning
@@ -85,7 +73,10 @@ export function applyLineDiff(
         if (idx < 0 || idx >= lines.length) continue
 
         // Replace existing line
-        lines[idx] = normalizeContent(op.text, options)
+        lines[idx] = normalizeContent(op.text, {
+          normalizeWhitespace: options.ignoreWhitespace,
+          ignoreCase: options.ignoreCase,
+        })
         break
 
       case "delete":

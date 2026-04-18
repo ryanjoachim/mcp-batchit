@@ -5,6 +5,8 @@
 /**
  * Options for path validation and normalization.
  */
+export const DEFAULT_MAX_FILE_SIZE = 52_428_800 // 50MB
+
 export interface PathOptions {
   /**
    * The root directory that all paths must be contained within.
@@ -27,6 +29,12 @@ export interface PathOptions {
    * where symlinks are trusted.
    */
   resolveSymlinks?: boolean
+
+  /**
+   * Maximum file size in bytes. Files exceeding this limit will not be read.
+   * Defaults to 50MB (52,428,800 bytes).
+   */
+  maxFileSize?: number
 }
 
 /**

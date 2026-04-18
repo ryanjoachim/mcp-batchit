@@ -124,6 +124,10 @@ export const MoveFileToolSchema = {
 export const CopyFileToolSchema = {
   sourcePath: z.string().describe("Absolute path of the source file"),
   destPath: z.string().describe("Absolute path of the destination"),
+  overwrite: z
+    .boolean()
+    .optional()
+    .describe("Whether to overwrite the destination (default: false)"),
 }
 
 // --- delete_file ---

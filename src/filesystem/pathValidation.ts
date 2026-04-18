@@ -97,9 +97,15 @@ export function validatePathWithResult(
       )
     }
 
-    // Check for excluded directories
+    // Check for excluded directories (must match full path segment, not just prefix)
     if (
-      excludedDirs.some((dir) => normalized.startsWith(path.normalize(dir)))
+      excludedDirs.some((dir) => {
+        const normalizedDir = path.normalize(dir)
+        return (
+          normalized === normalizedDir ||
+          normalized.startsWith(normalizedDir + path.sep)
+        )
+      })
     ) {
       throw ErrorManager.createPermissionError(
         "access",
@@ -182,8 +188,13 @@ export async function validatePathWithSymlinks(
               "Resolved parent path escapes root directory (possible symlink)"
             )
           }
-        } catch {
-          // Parent doesn't exist either, skip symlink check
+        } catch (parentError) {
+          if (parentError instanceof McpError) throw parentError
+          // Parent doesn't exist — can't verify safety, fail closed
+          throw ErrorManager.createPathValidationError(
+            result.normalizedPath,
+            "Cannot verify path safety: parent directory does not exist"
+          )
         }
       }
       // Other errors (e.g., permissions) are not symlink issues, skip

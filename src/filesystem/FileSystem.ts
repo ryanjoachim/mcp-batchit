@@ -5,7 +5,7 @@ import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js"
 import { withRecovery } from "../utils/recovery.js"
 import { validatePathWithSymlinks } from "./pathValidation.js"
 import { trackContentModification } from "./contentTracking.js"
-import { extractTextFromPDF, extractTextFromDOCX } from "./fileTypeHandlers.js"
+import { extractTextFromPDF, extractTextFromDOCX, checkFileSize } from "./fileTypeHandlers.js"
 import { resolveResultReferences } from "../utils/resultResolver.js"
 import { resolveTemplates } from "../utils/templateResolver.js"
 import { ResultsCache } from "../utils/resultsCache.js"
@@ -108,6 +108,7 @@ export class FileSystem {
       rootDirectory: options.rootDirectory,
       excludedDirs: options.excludedDirs,
       allowRelative: options.allowRelative,
+      maxFileSize: options.maxFileSize,
     }
 
     this.maxConcurrent = options.maxConcurrent || 10
@@ -140,6 +141,8 @@ export class FileSystem {
       } catch {
         throw ErrorManager.createNotFoundError("File", validPath)
       }
+
+      await checkFileSize(validPath, this.config.maxFileSize)
 
       let content: string
       const fileType = path.extname(validPath).toLowerCase()
@@ -179,6 +182,14 @@ export class FileSystem {
 
       if (opts.addLineNumbers) {
         const lines = content.split("\n")
+        // Remove phantom trailing element from trailing newline
+        if (
+          lines.length > 0 &&
+          lines[lines.length - 1] === "" &&
+          content.endsWith("\n")
+        ) {
+          lines.pop()
+        }
         const maxLineNumber = opts.startLineNumber + lines.length - 1
         const numberWidth = maxLineNumber.toString().length
 
@@ -207,39 +218,43 @@ export class FileSystem {
     paths: string[],
     options: ReadOptions = {}
   ): Promise<{ path: string; content?: string; error?: string }[]> {
-    if (!Array.isArray(paths) || paths.length === 0) {
-      throw ErrorManager.createMissingParamError("paths", "readFiles operation")
-    }
-
-    // Initialize results array with the same length as paths
-    const results: { path: string; content?: string; error?: string }[] = Array(
-      paths.length
-    ).fill(null)
-
-    // Create a function to process a file at a specific index
-    const processFile = async (filePath: string, index: number) => {
-      try {
-        const content = await this.readFile(filePath, options)
-        results[index] = { path: filePath, content }
-      } catch (error) {
-        const normalizedError = ErrorManager.normalizeError(
-          error,
-          `Failed to read file ${filePath}`
+    return withRecovery(async () => {
+      if (!Array.isArray(paths) || paths.length === 0) {
+        throw ErrorManager.createMissingParamError(
+          "paths",
+          "readFiles operation"
         )
-        results[index] = { path: filePath, error: normalizedError.message }
       }
-    }
 
-    // Process files in batches while maintaining order
-    for (let i = 0; i < paths.length; i += this.maxConcurrent) {
-      const batch = paths.slice(i, i + this.maxConcurrent)
-      const batchPromises = batch.map((filePath, batchIndex) =>
-        processFile(filePath, i + batchIndex)
-      )
-      await Promise.all(batchPromises)
-    }
+      // Initialize results array with the same length as paths
+      const results: { path: string; content?: string; error?: string }[] =
+        Array(paths.length).fill(null)
 
-    return results
+      // Create a function to process a file at a specific index
+      const processFile = async (filePath: string, index: number) => {
+        try {
+          const content = await this.readFile(filePath, options)
+          results[index] = { path: filePath, content }
+        } catch (error) {
+          const normalizedError = ErrorManager.normalizeError(
+            error,
+            `Failed to read file ${filePath}`
+          )
+          results[index] = { path: filePath, error: normalizedError.message }
+        }
+      }
+
+      // Process files in batches while maintaining order
+      for (let i = 0; i < paths.length; i += this.maxConcurrent) {
+        const batch = paths.slice(i, i + this.maxConcurrent)
+        const batchPromises = batch.map((filePath, batchIndex) =>
+          processFile(filePath, i + batchIndex)
+        )
+        await Promise.all(batchPromises)
+      }
+
+      return results
+    })
   }
 
   /**
@@ -265,23 +280,23 @@ export class FileSystem {
     const dir = path.dirname(validPath)
     await fs.mkdir(dir, { recursive: true })
 
-    let hadExistingContent = true
-    let existingContent: string | undefined
-
-    try {
-      existingContent = await fs.readFile(validPath, "utf-8")
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        hadExistingContent = false
-      } else {
-        throw ErrorManager.normalizeError(
-          error,
-          `Failed to read existing file ${validPath}`
-        )
-      }
-    }
-
     return withRecovery(async () => {
+      let hadExistingContent = true
+      let existingContent: string | undefined
+
+      try {
+        existingContent = await fs.readFile(validPath, "utf-8")
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          hadExistingContent = false
+        } else {
+          throw ErrorManager.normalizeError(
+            error,
+            `Failed to read existing file ${validPath}`
+          )
+        }
+      }
+
       // Handle template resolution and reference resolution
       let resolvedContent: unknown
 
@@ -395,20 +410,26 @@ export class FileSystem {
 
       // Check if destination exists
       try {
-        await fs.access(validDestPath)
+        const destStats = await fs.stat(validDestPath)
         if (!options.overwrite) {
           throw ErrorManager.createAlreadyExistsError(
             "Destination",
             validDestPath
           )
         }
-        // If overwrite is true, remove existing destination
-        await fs.rm(validDestPath, { recursive: true, force: true })
+        // Only allow overwriting files, not directories
+        if (destStats.isDirectory()) {
+          throw ErrorManager.createInvalidFormatError(
+            "Destination",
+            `Cannot overwrite directory: ${validDestPath}`
+          )
+        }
+        await fs.unlink(validDestPath)
       } catch (error) {
-        // Ignore error if destination doesn't exist
         if (error instanceof McpError) {
           throw error
         }
+        // ENOENT means destination doesn't exist, which is fine
       }
 
       // Create destination directory if needed
@@ -478,7 +499,11 @@ export class FileSystem {
    * @param destPath The destination path to copy the file to
    * @returns Promise that resolves when the copy is complete
    */
-  async copyFile(sourcePath: string, destPath: string): Promise<void> {
+  async copyFile(
+    sourcePath: string,
+    destPath: string,
+    options: { overwrite?: boolean } = {}
+  ): Promise<void> {
     return withRecovery(async () => {
       const validSourceResult = await validatePathWithSymlinks(
         sourcePath,
@@ -495,6 +520,29 @@ export class FileSystem {
         await fs.access(validSourcePath)
       } catch {
         throw ErrorManager.createNotFoundError("Source file", validSourcePath)
+      }
+
+      // Check if destination exists
+      try {
+        const destStats = await fs.stat(validDestPath)
+        if (!options.overwrite) {
+          throw ErrorManager.createAlreadyExistsError(
+            "Destination",
+            validDestPath
+          )
+        }
+        if (destStats.isDirectory()) {
+          throw ErrorManager.createInvalidFormatError(
+            "Destination",
+            `Cannot overwrite directory: ${validDestPath}`
+          )
+        }
+        await fs.unlink(validDestPath)
+      } catch (error) {
+        if (error instanceof McpError) {
+          throw error
+        }
+        // ENOENT means destination doesn't exist, which is fine
       }
 
       const destDir = path.dirname(validDestPath)
@@ -573,14 +621,14 @@ export class FileSystem {
     directory: string,
     options: SearchOptions
   ): Promise<unknown> {
-    return searchFiles(directory, options, this.config)
+    return withRecovery(() => searchFiles(directory, options, this.config))
   }
 
   /**
    * Get detailed information about a file or directory
    */
   async getFileInfo(filePath: string): Promise<FileInfo> {
-    return getFileInfo(filePath, this.config)
+    return withRecovery(() => getFileInfo(filePath, this.config))
   }
 
   /**
@@ -590,7 +638,7 @@ export class FileSystem {
     dirPath: string,
     format: "json" | "text" = "json"
   ): Promise<string> {
-    return directoryTree(dirPath, this.config, format)
+    return withRecovery(() => directoryTree(dirPath, this.config, format))
   }
 
   /**
@@ -607,11 +655,24 @@ export class FileSystem {
       )
       const validPath = validationResult.normalizedPath
 
-      // Read existing content
+      // Read existing content (skip binary check so we can handle it ourselves)
       let existingContent: string
       let hadExistingContent = true
       try {
-        existingContent = normalizeLineEndings(await this.readFile(validPath))
+        existingContent = normalizeLineEndings(
+          await this.readFile(validPath, { checkBinary: false })
+        )
+
+        // Reject non-overwrite operations on binary files
+        if (operation.mode !== "overwrite") {
+          const isBinary = await isBinaryFile(validPath).catch(() => false)
+          if (isBinary) {
+            throw ErrorManager.createInvalidFormatError(
+              "File",
+              `Cannot apply ${operation.mode} to binary file: ${validPath}`
+            )
+          }
+        }
       } catch (error) {
         if ((error as McpError).code === ErrorCode.InvalidParams) {
           hadExistingContent = false
@@ -631,11 +692,26 @@ export class FileSystem {
 
       switch (operation.mode) {
         case "overwrite":
-          newContent = operation.content as string
+          if (operation.content === undefined) {
+            throw ErrorManager.createMissingParamError(
+              "content",
+              "overwrite operation"
+            )
+          }
+          newContent = operation.content
           break
 
         case "append":
-          newContent = existingContent + "\n" + (operation.content as string)
+          if (operation.content === undefined) {
+            throw ErrorManager.createMissingParamError(
+              "content",
+              "append operation"
+            )
+          }
+          newContent =
+            existingContent && !existingContent.endsWith("\n")
+              ? existingContent + "\n" + operation.content
+              : existingContent + operation.content
           break
 
         case "diff":

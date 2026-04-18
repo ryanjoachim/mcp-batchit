@@ -132,7 +132,9 @@ function createInternalFilesystemProvider(
               "Missing required parameters: sourcePath and/or destPath"
             )
           }
-          await fs.copyFile(String(args.sourcePath), String(args.destPath))
+          await fs.copyFile(String(args.sourcePath), String(args.destPath), {
+            overwrite: "overwrite" in args ? Boolean(args.overwrite) : false,
+          })
           return "File copied successfully"
 
         case "delete_file":

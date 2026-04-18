@@ -8,6 +8,7 @@
 import { createTwoFilesPatch } from "diff"
 import { promisify } from "util"
 import { gzip } from "zlib"
+import { normalizeContent } from "./normalizeContent.js"
 
 const gzipAsync = promisify(gzip)
 
@@ -92,26 +93,6 @@ export interface DiffResult {
 }
 
 /**
- * Normalizes line endings and optionally handles whitespace and case
- */
-function normalizeContent(
-  content: string,
-  options: DiffGenerationOptions = {}
-): string {
-  let result = content.replace(/\r\n/g, "\n")
-
-  if (options.normalizeWhitespace !== false) {
-    result = result.replace(/[ \t]+/g, " ").trim()
-  }
-
-  if (options.ignoreCase) {
-    result = result.toLowerCase()
-  }
-
-  return result
-}
-
-/**
  * Parses diff statistics from a diff string
  */
 function parseDiffStats(diff: string): {
@@ -182,18 +163,14 @@ export async function generateDiff(
   }
 
   // Normalize content if requested
-  let oldNorm = oldContent
-  let newNorm = newContent
-
-  if (normalizeWhitespace) {
-    oldNorm = normalizeContent(oldNorm, options)
-    newNorm = normalizeContent(newNorm, options)
-  }
-
-  if (ignoreCase) {
-    oldNorm = oldNorm.toLowerCase()
-    newNorm = newNorm.toLowerCase()
-  }
+  let oldNorm = normalizeContent(oldContent, {
+    normalizeWhitespace,
+    ignoreCase,
+  })
+  let newNorm = normalizeContent(newContent, {
+    normalizeWhitespace,
+    ignoreCase,
+  })
 
   // Check again after normalization
   if (oldNorm === newNorm) {

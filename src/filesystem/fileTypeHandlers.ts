@@ -3,6 +3,7 @@ import path from "path"
 import { ErrorManager } from "../utils/errorManager.js"
 import { extractText, getDocumentProxy } from "unpdf"
 import { FileMetadata } from "../types/filesystem/fileInfo.js"
+import { DEFAULT_MAX_FILE_SIZE } from "../types/filesystem/paths.js"
 
 /**
  * Detects the MIME type of a file based on its extension
@@ -41,9 +42,26 @@ export function getMimeType(filePath: string): string | undefined {
 }
 
 /**
+ * Checks if a file exceeds the maximum allowed size.
+ */
+export async function checkFileSize(
+  filePath: string,
+  maxBytes: number = DEFAULT_MAX_FILE_SIZE
+): Promise<void> {
+  const stats = await fs.stat(filePath)
+  if (stats.size > maxBytes) {
+    throw ErrorManager.createInvalidFormatError(
+      "File",
+      `File ${filePath} exceeds maximum size limit (${stats.size} bytes > ${maxBytes} bytes)`
+    )
+  }
+}
+
+/**
  * Extracts text content from a PDF file using unpdf
  */
 export async function extractTextFromPDF(filePath: string): Promise<string> {
+  await checkFileSize(filePath)
   try {
     const dataBuffer = await fs.readFile(filePath)
     const pdf = await getDocumentProxy(new Uint8Array(dataBuffer))
@@ -61,6 +79,7 @@ export async function extractTextFromPDF(filePath: string): Promise<string> {
  * Extracts text content from a DOCX file
  */
 export async function extractTextFromDOCX(filePath: string): Promise<string> {
+  await checkFileSize(filePath)
   try {
     const mammoth = await import("mammoth")
     const result = await mammoth.extractRawText({ path: filePath })
@@ -79,6 +98,7 @@ export async function extractTextFromDOCX(filePath: string): Promise<string> {
 export async function extractFileMetadata(
   filePath: string
 ): Promise<FileMetadata> {
+  await checkFileSize(filePath)
   try {
     const mimeType = getMimeType(filePath) || "application/octet-stream"
 
